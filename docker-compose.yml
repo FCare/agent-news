@@ -1,8 +1,14 @@
+networks:
+  ansible:
+    external: true
+
 services:
   agent-news:
     build: .
     container_name: agent-news
     env_file: .env
+    networks:
+      - ansible
     volumes:
       - news-data:/data
     restart: unless-stopped
