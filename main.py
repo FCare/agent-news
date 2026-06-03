@@ -30,8 +30,6 @@ MQTT_HOST           = os.environ["MQTT_HOST"]
 MQTT_PORT           = int(os.environ.get("MQTT_PORT", "1883"))
 SERVICE_USERNAME    = os.environ["MQTT_SERVICE_USERNAME"]
 SERVICE_API_KEY     = os.environ["MQTT_SERVICE_API_KEY"]
-SEARCH_USERNAME     = os.environ.get("SEARCH_USERNAME", os.environ.get("MQTT_SERVICE_USERNAME", "news"))
-SEARCH_PASSWORD     = os.environ.get("SEARCH_PASSWORD", os.environ.get("MQTT_SERVICE_API_KEY", ""))
 LLM_BASE_URL        = os.environ.get("LLM_BASE_URL", "https://thebrain.caronboulme.fr/v1")
 LLM_MODEL           = os.environ.get("LLM_MODEL", "qwen3-vl-8b-instruct")
 LLAMACPP_API_KEY    = os.environ["LLAMACPP_API_KEY"]
@@ -375,7 +373,7 @@ async def main() -> None:
     global _search_client
     nexus = NexusClient.from_api_key(VK_URL, MQTT_HOST, SERVICE_USERNAME, SERVICE_API_KEY, MQTT_PORT)
 
-    await _search_client.setup(nexus, SEARCH_USERNAME, SEARCH_PASSWORD, VK_URL)
+    await _search_client.setup(nexus, SERVICE_USERNAME, SERVICE_API_KEY)
 
     nexus.subscribe("common/user_connected", on_user_connected)
     nexus.start_listening()

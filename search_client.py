@@ -24,25 +24,26 @@ class SearchClient:
         self._pending: asyncio.Future | None = None
         self._ready = False
 
-    async def setup(self, nexus, search_username: str, search_password: str,
-                    vk_url: str) -> None:
+    async def setup(self, nexus, service_username: str, api_key: str) -> None:
         self._nexus = nexus
-        self._request_topic = f"users/{search_username}/search/request"
-        self._result_topic = f"users/{search_username}/search/result"
+        self._request_topic = f"users/{service_username}/search/request"
+        self._result_topic = f"users/{service_username}/search/result"
 
         nexus.subscribe(self._result_topic, self._on_result)
 
-        # Trigger the search agent to subscribe for this user
+        # Trigger the search agent to set up topics for this service user.
+        # The search agent only checks username/password are non-empty; actual
+        # auth is handled at MQTT broker level via the API key.
         await nexus.publish("common/user_connected", {
-            "username": search_username,
-            "password": search_password,
+            "username": service_username,
+            "password": api_key,
             "private_topics": [{
                 "topics": [{
-                    "topic": f"users/{search_username}/agent_topics"
+                    "topic": f"users/{service_username}/agent_topics"
                 }]
             }],
         })
-        logger.info(f"user_connected publié pour {search_username}")
+        logger.info(f"user_connected publié pour {service_username}")
         await asyncio.sleep(SEARCH_INIT_DELAY)
         self._ready = True
 
