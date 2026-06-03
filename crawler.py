@@ -96,6 +96,8 @@ RSS_FEEDS = [
     ("https://www.undernews.fr/feed",                                    "UnderNews",           "FR"),
     ("https://www.zataz.com/feed/",                                      "ZATAZ",               "FR"),
     ("https://www.developpez.com/index/rss",                             "Developpez.com",      "FR"),
+    ("https://www.blogdumoderateur.com/feed/",                           "Blog du Modérateur",  "FR"),
+    ("https://stackoverflow.blog/feed/",                                 "Stack Overflow Blog", "US"),
     # ── Tech & IT EN ─────────────────────────────────────────────────────
     ("https://arstechnica.com/feed/",                                    "Ars Technica",        "US"),
     ("https://www.theverge.com/rss/index.xml",                           "The Verge",           "US"),
