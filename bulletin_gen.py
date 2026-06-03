@@ -26,10 +26,11 @@ CATEGORIES = [
 # Worst-case deep dive: 8 articles × 3 000 chars + 10 searches × 2 000 chars
 # ≈ (24 000 + 20 000) / 4 ≈ 11 000 tokens — well within limit.
 MAX_ARTICLES_FOR_CLUSTER = 80        # titles only — beyond this, topics repeat
+MAX_TOPICS = 25                      # cap after clustering — 25 × 5 × 17s ≈ 35 min
 MAX_BODY_IN_DEEP_DIVE = 3000         # full article body (matches crawler MAX_BODY_CHARS)
 MAX_ARTICLES_IN_DEEP_DIVE = 8        # max articles per topic in deep dive
 MAX_SEARCH_REPORT_IN_DEEP_DIVE = 2000  # richer search context
-SEARCH_QUERIES_PER_TOPIC = 10
+SEARCH_QUERIES_PER_TOPIC = 5         # 10 → 5 : corpus RSS déjà riche, web search = enrichissement
 
 # ---------------------------------------------------------------------------
 # Tool definitions
@@ -92,14 +93,12 @@ _SEARCH_QUERIES_TOOL = [{
                     "type": "array",
                     "items": {"type": "string"},
                     "description": (
-                        "10 requêtes couvrant: (1) faits récents précis, (2) contexte historique, "
-                        "(3) réactions officielles, (4) implications économiques, "
-                        "(5) implications géopolitiques, (6) analyses d'experts, "
-                        "(7) perspective américaine, (8) perspective européenne, "
-                        "(9) chiffres et données clés, (10) prochains développements attendus"
+                        "5 requêtes couvrant: (1) faits récents, (2) contexte historique, "
+                        "(3) réactions officielles, (4) implications économiques/géopolitiques, "
+                        "(5) analyses d'experts et perspectives"
                     ),
-                    "minItems": 10,
-                    "maxItems": 10,
+                    "minItems": 5,
+                    "maxItems": 5,
                 }
             },
             "required": ["queries"],
@@ -331,7 +330,11 @@ async def _cluster_topics(articles: list[RawArticle],
     n_dupes = len(topics) - len(unique)
     topics = unique
 
-    logger.info(f"Clustering: {len(topics)} sujets ({n_dupes} doublons supprimés)")
+    if len(topics) > MAX_TOPICS:
+        topics = topics[:MAX_TOPICS]
+        logger.info(f"Clustering: {len(topics)} sujets retenus sur {len(topics)+n_dupes} ({n_dupes} doublons, {len(topics)+n_dupes-len(topics)} écrêtés par importance)")
+    else:
+        logger.info(f"Clustering: {len(topics)} sujets ({n_dupes} doublons supprimés)")
     for t in topics:
         logger.info(f"  [{t.get('importance',0):2d}] [{t['category']}] {t['title']}")
     return topics
@@ -343,10 +346,12 @@ async def _generate_search_queries(topic: dict,
     result = await _llm(
         llm_client, model,
         system=(
-            "Tu es journaliste d'investigation. Génère exactement 10 requêtes de recherche web "
-            "pour approfondir un sujet d'actualité selon les 10 angles imposés. "
-            "Formule des requêtes efficaces pour un moteur d'actualités. "
-            "Réponds en appelant generate_search_queries."
+            f"Tu es journaliste d'investigation. Génère exactement {SEARCH_QUERIES_PER_TOPIC} requêtes "
+            "de recherche web pour enrichir un sujet d'actualité. "
+            "Couvre: (1) faits récents, (2) contexte/historique, (3) réactions officielles, "
+            "(4) implications économiques ou géopolitiques, (5) perspectives d'experts. "
+            "Requêtes courtes et efficaces pour un moteur d'actualités. "
+            "Appelle generate_search_queries."
         ),
         user=(
             f"Sujet: {topic['title']}\n"
