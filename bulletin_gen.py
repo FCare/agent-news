@@ -256,11 +256,23 @@ async def _cluster_topics(articles: list[RawArticle],
     MAX_TOPICS = 25
     topics = result.get("topics", [])
     topics.sort(key=lambda t: -t.get("importance", 0))
+
+    # Deduplicate by title (LLM sometimes generates the same generic topic multiple times)
+    seen_titles: set[str] = set()
+    unique_topics = []
+    for t in topics:
+        key = t["title"].lower().strip()
+        if key not in seen_titles:
+            seen_titles.add(key)
+            unique_topics.append(t)
+    n_dupes = len(topics) - len(unique_topics)
+    topics = unique_topics
+
     if len(topics) > MAX_TOPICS:
-        logger.info(f"Clustering: {len(topics)} sujets → tronqué à {MAX_TOPICS} (top importance)")
+        logger.info(f"Clustering: {len(topics)} sujets ({n_dupes} doublons supprimés) → tronqué à {MAX_TOPICS}")
         topics = topics[:MAX_TOPICS]
     else:
-        logger.info(f"Clustering: {len(topics)} sujets identifiés")
+        logger.info(f"Clustering: {len(topics)} sujets ({n_dupes} doublons supprimés)")
     for t in topics:
         logger.info(f"  [{t.get('importance',0):2d}] [{t['category']}] {t['title']}")
     return topics
