@@ -264,11 +264,11 @@ async def on_user_connected(topic: str, payload) -> None:
                     "Source EXCLUSIVE d'actualités en temps réel. "
                     "OBLIGATOIRE pour toute question sur l'actualité, les nouvelles, les événements récents. "
                     "Choisis le type selon l'intention : "
-                    "flash → quoi de neuf, résumé rapide, les grandes lignes (ex: 'quelles sont les nouvelles ?', 'quoi de neuf ?', 'résume l\\'actu') ; "
-                    "bulletin → journal complet, toutes les catégories (ex: 'donne-moi le journal', 'toutes les nouvelles du jour') ; "
-                    "category → actualité d\\'un domaine précis (ex: 'les nouvelles en Europe', 'l\\'actu tech', 'que se passe-t-il en France ?') ; "
-                    "deep_dive → analyse approfondie d\\'un sujet nommé, utilise le champ topic (ex: 'parle-moi de X', 'dis-m\\'en plus sur Y') ; "
-                    "question → question ouverte sur l\\'actu, utilise le champ query (ex: 'est-ce que Z a eu lieu ?', 'qu\\'est-il arrivé à W ?') ; "
+                    "flash → résumé rapide de l\\'actu du jour (ex: 'quelles sont les nouvelles ?', 'quoi de neuf ?', 'résume l\\'actu') ; "
+                    "bulletin → journal complet toutes catégories (ex: 'donne-moi le journal complet', 'toutes les nouvelles du jour') ; "
+                    "category → actualité d\\'un domaine précis (ex: 'les nouvelles en Europe', 'l\\'actu tech', 'que se passe-t-il en France aujourd\\'hui ?', 'les nouvelles en Allemagne') ; "
+                    "deep_dive → analyse d\\'un sujet d\\'actualité déjà mentionné ou explicitement récent (ex: 'dis-m\\'en plus sur cette affaire', 'approfondis le sujet du TSV Munich') ; "
+                    "question → question précise sur un fait d\\'actualité (ex: 'qu\\'est-il arrivé avec l\\'AfD ?', 'y a-t-il des nouvelles sur le conflit Iran-USA ?') ; "
                     "history → bulletins des jours précédents (ex: 'les nouvelles d\\'hier', 'bulletin du 2 juin')."
                 ),
                 "access": "write",
@@ -304,7 +304,7 @@ async def on_user_connected(topic: str, payload) -> None:
         if not isinstance(p, dict):
             return
         req_type = p.get("type", "bulletin").lower()
-        logger.info(f"[{username}] Requête news: type={req_type}")
+        logger.info(f"[{username}] Requête news: {p}")
 
         bulletin_row = await storage.get_latest_bulletin()
 
