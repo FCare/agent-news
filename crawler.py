@@ -1,13 +1,12 @@
 import asyncio
-import html
 import logging
 import re
-import urllib.request
-import xml.etree.ElementTree as ET
+import time
 from dataclasses import dataclass
-from datetime import datetime
-from email.utils import parsedate_to_datetime
+from datetime import datetime, timezone
 from urllib.parse import urlparse
+
+import feedparser
 
 logger = logging.getLogger(__name__)
 
@@ -160,129 +159,61 @@ def _get_publisher_info(url: str) -> tuple[str, str]:
 
 def _strip_html(text: str) -> str:
     text = re.sub(r"<[^>]+>", " ", text)
-    text = html.unescape(text)
-    return re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
 
 
-def _parse_date(date_str: str | None) -> datetime | None:
-    if not date_str:
-        return None
-    try:
-        return parsedate_to_datetime(date_str)
-    except Exception:
-        try:
-            return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
-        except Exception:
-            return None
+def _entry_body(entry) -> str:
+    """Extract best available body text from a feedparser entry."""
+    # content[] is the richest field (content:encoded or atom:content)
+    for c in entry.get("content", []):
+        v = (c.get("value") or "").strip()
+        if v:
+            return _strip_html(v)
+    for field in ("summary", "description"):
+        v = (entry.get(field) or "").strip()
+        if v:
+            return _strip_html(v)
+    return ""
 
 
-_ATOM_NS  = "http://www.w3.org/2005/Atom"
-_CONTENT_NS = "http://purl.org/rss/1.0/modules/content/"
-_DC_NS    = "http://purl.org/dc/elements/1.1/"
-
-# ElementTree elements are FALSY when they have no children, even if they have text.
-# Always use `is not None` to test element existence.
-def _el(item: ET.Element, *tags: str) -> ET.Element | None:
-    """Return the first tag that exists (is not None)."""
-    for tag in tags:
-        el = item.find(tag)
-        if el is not None:
-            return el
+def _entry_date(entry) -> datetime | None:
+    for field in ("published_parsed", "updated_parsed"):
+        t = entry.get(field)
+        if t:
+            try:
+                return datetime(*t[:6], tzinfo=timezone.utc)
+            except Exception:
+                pass
     return None
 
 
-def _el_text(item: ET.Element, *tags: str) -> str:
-    el = _el(item, *tags)
-    return (el.text or "").strip() if el is not None else ""
-
-
-def _fix_xml(raw: bytes) -> bytes:
-    """Best-effort fix for common XML issues."""
-    # Remove XML-illegal control characters (keep tab/LF/CR)
-    raw = re.sub(rb'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', b'', raw)
-    # Fix bare & not part of a named/numeric entity
-    raw = re.sub(rb'&(?!(?:amp|lt|gt|apos|quot|#x?[0-9a-fA-F]+);)', b'&amp;', raw)
-    return raw
-
-
 def _fetch_rss(url: str, publisher: str, country: str) -> list[RawArticle]:
-    import gzip as _gzip
-
+    """Fetch and parse an RSS/Atom feed using feedparser (handles malformed XML)."""
     try:
-        req = urllib.request.Request(url, headers={
-            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0",
-            "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
-            "Accept-Encoding": "gzip, deflate",
-        })
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            raw_bytes = resp.read()
-            enc = resp.headers.get("Content-Encoding", "")
-            if "gzip" in enc:
-                raw_bytes = _gzip.decompress(raw_bytes)
+        feed = feedparser.parse(
+            url,
+            agent="Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0",
+            request_headers={"Accept-Encoding": "gzip, deflate"},
+        )
     except Exception as e:
         logger.warning(f"RSS fetch failed ({publisher}): {e}")
         return []
 
-    if not raw_bytes:
-        logger.warning(f"RSS empty response ({publisher})")
+    if feed.get("bozo") and not feed.entries:
+        exc = feed.get("bozo_exception", "")
+        logger.warning(f"RSS parse error ({publisher}): {exc}")
         return []
-
-    raw_bytes = _fix_xml(raw_bytes)
-
-    try:
-        root = ET.fromstring(raw_bytes)
-    except ET.ParseError as e:
-        logger.warning(f"RSS parse error ({publisher}): {e}")
-        return []
-
-    # RSS 2.0 items or Atom entries
-    items = root.findall(".//item")
-    if not items:
-        items = root.findall(f".//{{{_ATOM_NS}}}entry")
 
     articles = []
-    n_skip = 0
-
-    for item in items[:MAX_ARTICLES_PER_FEED]:
+    for entry in feed.entries[:MAX_ARTICLES_PER_FEED]:
         try:
-            # ── Title ──────────────────────────────────────────────────────
-            title = _strip_html(_el_text(item,
-                "title",
-                f"{{{_ATOM_NS}}}title",
-            ))
-
-            # ── URL ────────────────────────────────────────────────────────
-            link_el = _el(item, "link")
-            if link_el is not None:
-                article_url = (link_el.text or link_el.get("href", "")).strip()
-            else:
-                link_el = _el(item, f"{{{_ATOM_NS}}}link")
-                article_url = (link_el.get("href", "") if link_el is not None else "")
-
-            # ── Body: content:encoded > description > atom content/summary ─
-            body = ""
-            for tag in [
-                f"{{{_CONTENT_NS}}}encoded",
-                "description",
-                f"{{{_ATOM_NS}}}content",
-                f"{{{_ATOM_NS}}}summary",
-            ]:
-                el = item.find(tag)
-                if el is not None and el.text:
-                    body = _strip_html(el.text)
-                    break
-
-            # ── Date ───────────────────────────────────────────────────────
-            pub_text = _el_text(item,
-                "pubDate",
-                f"{{{_ATOM_NS}}}published",
-                f"{{{_ATOM_NS}}}updated",
-                f"{{{_DC_NS}}}date",
-            )
-            published_at = _parse_date(pub_text or None)
+            title = _strip_html(entry.get("title", "").strip())
+            article_url = entry.get("link", "").strip()
+            body = _entry_body(entry)
+            published_at = _entry_date(entry)
 
             if not title or len(body) < 50:
-                n_skip += 1
                 continue
 
             articles.append(RawArticle(
@@ -294,12 +225,8 @@ def _fetch_rss(url: str, publisher: str, country: str) -> list[RawArticle]:
                 published_at=published_at,
             ))
         except Exception as e:
-            n_skip += 1
-            if n_skip <= 2:
-                logger.warning(f"RSS item error ({publisher}): {type(e).__name__}: {e}")
+            logger.debug(f"RSS entry skip ({publisher}): {e}")
 
-    if n_skip:
-        logger.debug(f"  RSS {publisher}: {n_skip} items ignorés")
     return articles
 
 
