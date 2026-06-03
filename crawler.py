@@ -64,9 +64,14 @@ RSS_FEEDS = [
     ("https://www.lefigaro.fr/rss/figaro_actualites.xml",                "Le Figaro",           "FR"),
     ("https://www.liberation.fr/arc/outboundfeeds/rss/",                 "Libération",          "FR"),
     ("https://www.francetvinfo.fr/titres.rss",                           "France TV Info",      "FR"),
-    ("https://www.nouvelobs.com/rss",                                    "Le Nouvel Obs",       "FR"),
     ("https://www.europe1.fr/rss.xml",                                   "Europe 1",            "FR"),
     ("https://www.bfmtv.com/rss/info/flux-rss/flux-toutes-les-actualites/", "BFM TV",          "FR"),
+    ("https://www.nouvelobs.com/a-la-une/rss.xml",                       "Le Nouvel Obs",       "FR"),
+    ("https://www.nouvelobs.com/politique/rss.xml",                      "Le Nouvel Obs Politique", "FR"),
+    ("https://www.nouvelobs.com/monde/rss.xml",                          "Le Nouvel Obs Monde", "FR"),
+    ("https://www.nouvelobs.com/economie/rss.xml",                       "Le Nouvel Obs Éco",   "FR"),
+    ("https://www.nouvelobs.com/culture/rss.xml",                        "Le Nouvel Obs Culture","FR"),
+    ("https://www.nouvelobs.com/sciences/rss.xml",                       "Le Nouvel Obs Sciences","FR"),
     # ── Actualités internationales ───────────────────────────────────────
     ("https://www.france24.com/fr/rss",                                  "France 24 FR",        "FR"),
     ("https://www.france24.com/en/rss",                                  "France 24 EN",        "FR"),
@@ -122,7 +127,7 @@ RSS_FEEDS = [
     # ── Économie ─────────────────────────────────────────────────────────
     ("https://www.bruegel.org/rss.xml",                                  "Bruegel",             "EU"),
     # ── BD & Comics ──────────────────────────────────────────────────────
-    ("https://actuabd.com/feed/",                                        "ActuaBD",             "FR"),
+    ("https://www.actuabd.com/?page=backend",                            "ActuaBD",             "FR"),
     ("https://www.cbr.com/feed/",                                        "CBR Comics",          "US"),
 ]
 
