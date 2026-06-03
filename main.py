@@ -62,10 +62,12 @@ async def run_bulletin_pipeline() -> None:
 
     try:
         # 1. Crawl
+        logger.info("[1/4] Crawl fundus en cours...")
         articles = await crawl_articles()
         if not articles:
-            logger.error("Aucun article crawlé, pipeline annulé")
+            logger.error("[1/4] Aucun article crawlé, pipeline annulé")
             return
+        logger.info(f"[1/4] Crawl terminé: {len(articles)} articles")
 
         # 2. Save articles
         rows = [
@@ -79,13 +81,15 @@ async def run_bulletin_pipeline() -> None:
         await storage.save_articles(rows)
 
         # 3. Generate bulletin
+        logger.info("[2/4] Clustering et identification des sujets...")
         llm = _get_llm_client()
         bulletin = await bulletin_gen.generate_bulletin(articles, _search_client, llm, LLM_MODEL)
         if not bulletin:
-            logger.error("Bulletin vide, pipeline annulé")
+            logger.error("[2/4] Bulletin vide, pipeline annulé")
             return
 
         # 4. Save
+        logger.info("[3/4] Sauvegarde du bulletin...")
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         n_topics = sum(len(v) for v in bulletin.get("categories", {}).values())
         await storage.save_bulletin(
@@ -98,6 +102,7 @@ async def run_bulletin_pipeline() -> None:
         )
 
         # 5. Purge old data
+        logger.info("[4/4] Purge des données anciennes...")
         await storage.purge_old_data()
 
         logger.info(f"=== Pipeline terminé: {n_topics} sujets pour le {today} ===")
