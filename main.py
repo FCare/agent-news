@@ -261,10 +261,17 @@ async def on_user_connected(topic: str, payload) -> None:
             {
                 "topic": request_topic,
                 "description": (
-                    "Accès au journal d'actualités. "
-                    "Types: flash (résumé 3 phrases), bulletin (journal complet), "
-                    "category (catégorie spécifique), deep_dive (sujet approfondi), "
-                    "question (question libre sur l'actu), history (historique)."
+                    "Source EXCLUSIVE d'actualités en temps réel. "
+                    "OBLIGATOIRE pour toute question sur l'actualité, les nouvelles du jour, "
+                    "les événements récents, la politique, l'économie, le sport, la science, la culture. "
+                    "Ne jamais répondre à une question d'actualité sans consulter ce service en premier. "
+                    "Types disponibles : "
+                    "flash (résumé des 3 sujets du jour en 3 phrases), "
+                    "bulletin (journal complet par catégories), "
+                    "category (sujets d'une catégorie : International, Europe, France, Économie, Géopolitique, Informatique, Science, Société, Culture), "
+                    "deep_dive (analyse approfondie d'un sujet précis, avec champ 'topic'), "
+                    "question (question libre en langage naturel sur l'actu du jour, avec champ 'query'), "
+                    "history (liste des bulletins archivés)."
                 ),
                 "access": "write",
                 "response_topic": result_topic,
