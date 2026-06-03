@@ -239,6 +239,7 @@ async def _cluster_topics(articles: list[RawArticle],
         f"[{i}] [{a.publisher} / {a.country}] {a.title}"
         for i, a in enumerate(sample)
     )
+    logger.info(f"  → appel LLM clustering ({len(sample)} titres)...")
     result = await _llm(
         llm_client, model,
         system=(
@@ -267,6 +268,7 @@ async def _cluster_topics(articles: list[RawArticle],
 
 async def _generate_search_queries(topic: dict,
                                     llm_client: openai.OpenAI, model: str) -> list[str]:
+    logger.info(f"    → appel LLM requêtes...")
     result = await _llm(
         llm_client, model,
         system=(
@@ -320,6 +322,7 @@ async def _generate_deep_dive(topic: dict, articles: list[RawArticle],
         f"=== RÉSULTATS DE RECHERCHE ({len(search_excerpts)}) ===\n{searches_block}"
     )
 
+    logger.info(f"    → appel LLM deep dive ({len(article_excerpts)} articles, {len(search_excerpts)} recherches)...")
     result = await _llm(
         llm_client, model,
         system=(
@@ -362,6 +365,7 @@ async def _generate_flash(topics: list[dict],
         f"- [{t['category']}] {t['title']}: {t.get('summary', '')[:200]}"
         for t in top
     )
+    logger.info(f"  → appel LLM flash ({len(top)} sujets)...")
     result = await _llm(
         llm_client, model,
         system=(
