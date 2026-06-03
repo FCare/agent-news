@@ -22,9 +22,13 @@ CATEGORIES = [
     "Littérature & BD",
 ]
 
-MAX_ARTICLES_FOR_CLUSTER = 120
-MAX_BODY_IN_DEEP_DIVE = 1000
-MAX_SEARCH_REPORT_IN_DEEP_DIVE = 500
+# Context budget: 128k tokens available.
+# Worst-case deep dive: 8 articles × 3 000 chars + 10 searches × 2 000 chars
+# ≈ (24 000 + 20 000) / 4 ≈ 11 000 tokens — well within limit.
+MAX_ARTICLES_FOR_CLUSTER = 200       # titles only (~100 chars each → ~5 000 tokens)
+MAX_BODY_IN_DEEP_DIVE = 3000         # full article body (matches crawler MAX_BODY_CHARS)
+MAX_ARTICLES_IN_DEEP_DIVE = 8        # max articles per topic in deep dive
+MAX_SEARCH_REPORT_IN_DEEP_DIVE = 2000  # richer search context
 SEARCH_QUERIES_PER_TOPIC = 10
 
 # ---------------------------------------------------------------------------
@@ -292,7 +296,7 @@ async def _generate_deep_dive(topic: dict, articles: list[RawArticle],
     # Gather relevant article bodies
     indices = topic.get("article_indices", [])
     article_excerpts = []
-    for idx in indices[:6]:
+    for idx in indices[:MAX_ARTICLES_IN_DEEP_DIVE]:
         if 0 <= idx < len(articles):
             a = articles[idx]
             excerpt = f"[{a.publisher}] {a.title}\n{a.body[:MAX_BODY_IN_DEEP_DIVE]}"
