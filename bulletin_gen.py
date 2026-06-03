@@ -1,0 +1,476 @@
+import asyncio
+import json
+import logging
+from typing import Any
+
+import openai
+
+from crawler import RawArticle
+from search_client import SearchClient
+
+logger = logging.getLogger(__name__)
+
+CATEGORIES = [
+    "International",
+    "Europe",
+    "France",
+    "Économie & Finance",
+    "Géopolitique & Défense",
+    "Informatique & IA",
+    "Science & Technologie",
+    "Société & Environnement",
+    "Littérature & BD",
+]
+
+MAX_ARTICLES_FOR_CLUSTER = 120
+MAX_BODY_IN_DEEP_DIVE = 1000
+MAX_SEARCH_REPORT_IN_DEEP_DIVE = 500
+SEARCH_QUERIES_PER_TOPIC = 10
+
+# ---------------------------------------------------------------------------
+# Tool definitions
+# ---------------------------------------------------------------------------
+
+_CLUSTER_TOOL = [{
+    "type": "function",
+    "function": {
+        "name": "identify_topics",
+        "description": (
+            "Identifie les sujets d'actualité distincts parmi les articles fournis. "
+            "Regroupe les articles couvrant le même événement en un seul sujet. "
+            "Classe par importance décroissante."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "topics": {
+                    "type": "array",
+                    "description": "Liste des sujets identifiés, du plus au moins important",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": {
+                                "type": "string",
+                                "description": "Titre court et accrocheur en français"
+                            },
+                            "category": {
+                                "type": "string",
+                                "enum": CATEGORIES,
+                            },
+                            "importance": {
+                                "type": "integer",
+                                "description": "Score 1-10, 10 = sujet majeur du jour"
+                            },
+                            "article_indices": {
+                                "type": "array",
+                                "items": {"type": "integer"},
+                                "description": "Indices (0-based) des articles couvrant ce sujet"
+                            },
+                            "key_facts": {
+                                "type": "string",
+                                "description": "2-3 faits clés en français, base pour le bulletin"
+                            },
+                        },
+                        "required": ["title", "category", "importance", "article_indices", "key_facts"],
+                    }
+                }
+            },
+            "required": ["topics"],
+        }
+    }
+}]
+
+_SEARCH_QUERIES_TOOL = [{
+    "type": "function",
+    "function": {
+        "name": "generate_search_queries",
+        "description": "Génère exactement 10 requêtes web pour approfondir un sujet d'actualité",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "queries": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "10 requêtes couvrant: (1) faits récents précis, (2) contexte historique, "
+                        "(3) réactions officielles, (4) implications économiques, "
+                        "(5) implications géopolitiques, (6) analyses d'experts, "
+                        "(7) perspective américaine, (8) perspective européenne, "
+                        "(9) chiffres et données clés, (10) prochains développements attendus"
+                    ),
+                    "minItems": 10,
+                    "maxItems": 10,
+                }
+            },
+            "required": ["queries"],
+        }
+    }
+}]
+
+_DEEP_DIVE_TOOL = [{
+    "type": "function",
+    "function": {
+        "name": "generate_analysis",
+        "description": "Génère l'analyse complète d'un sujet pour le journal télévisé",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "summary": {
+                    "type": "string",
+                    "description": (
+                        "Résumé factuel en 3-5 phrases, style JT 20h. "
+                        "Faits précis, chiffres si disponibles, ton oral."
+                    )
+                },
+                "deep_dive": {
+                    "type": "string",
+                    "description": (
+                        "Analyse approfondie: contexte historique, enjeux stratégiques, "
+                        "chiffres clés, perspectives EU et US, déclarations importantes, "
+                        "conséquences potentielles. Ton oral sérieux, 6-10 phrases, sans liste."
+                    )
+                },
+                "what_to_watch": {
+                    "type": "string",
+                    "description": "Ce qu'il faut surveiller / prochaines étapes. 1-2 phrases."
+                },
+                "sources": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Noms des médias sources (max 6)"
+                },
+            },
+            "required": ["summary", "deep_dive", "what_to_watch", "sources"],
+        }
+    }
+}]
+
+_FLASH_TOOL = [{
+    "type": "function",
+    "function": {
+        "name": "generate_flash",
+        "description": "Génère le flash info et le titre du JT du jour",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "headline": {
+                    "type": "string",
+                    "description": "Titre principal du jour, une phrase percutante"
+                },
+                "flash": {
+                    "type": "string",
+                    "description": (
+                        "3 phrases résumant les 3 sujets les plus importants du jour. "
+                        "Commence par 'Ce soir au journal...'. Style présentateur TV."
+                    )
+                },
+            },
+            "required": ["headline", "flash"],
+        }
+    }
+}]
+
+_ANSWER_TOOL = [{
+    "type": "function",
+    "function": {
+        "name": "answer_question",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "answer": {
+                    "type": "string",
+                    "description": (
+                        "Réponse complète à la question en français, style oral. "
+                        "Basée sur les informations disponibles dans le bulletin."
+                    )
+                },
+                "needs_web_search": {
+                    "type": "boolean",
+                    "description": "True si le bulletin ne couvre pas ce sujet"
+                },
+            },
+            "required": ["answer", "needs_web_search"],
+        }
+    }
+}]
+
+
+# ---------------------------------------------------------------------------
+# LLM helpers
+# ---------------------------------------------------------------------------
+
+def _llm_call(llm_client: openai.OpenAI, model: str, system: str,
+              user: str, tool: list) -> dict:
+    resp = llm_client.chat.completions.create(
+        model=model,
+        messages=[
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        tools=tool,
+        tool_choice="required",
+    )
+    calls = resp.choices[0].message.tool_calls
+    if not calls:
+        return {}
+    return json.loads(calls[0].function.arguments)
+
+
+async def _llm(llm_client: openai.OpenAI, model: str, system: str,
+               user: str, tool: list) -> dict:
+    loop = asyncio.get_event_loop()
+    try:
+        return await loop.run_in_executor(
+            None, _llm_call, llm_client, model, system, user, tool
+        )
+    except Exception as e:
+        logger.error(f"LLM call failed: {e}")
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Pipeline steps
+# ---------------------------------------------------------------------------
+
+async def _cluster_topics(articles: list[RawArticle],
+                           llm_client: openai.OpenAI, model: str) -> list[dict]:
+    sample = articles[:MAX_ARTICLES_FOR_CLUSTER]
+    articles_text = "\n".join(
+        f"[{i}] [{a.publisher} / {a.country}] {a.title}"
+        for i, a in enumerate(sample)
+    )
+    result = await _llm(
+        llm_client, model,
+        system=(
+            "Tu es éditeur d'un journal télévisé de référence. Tu reçois des titres d'articles "
+            "de presse européens et américains. Identifie les sujets d'actualité distincts, "
+            "regroupe les articles qui couvrent le même événement, et classe par importance. "
+            f"Catégories disponibles: {', '.join(CATEGORIES)}. "
+            "Les sujets tech/IA vont dans 'Informatique & IA'. "
+            "Vise 15-25 sujets distincts. Réponds en appelant identify_topics."
+        ),
+        user=f"Articles de presse ({len(sample)} titres):\n\n{articles_text}",
+        tool=_CLUSTER_TOOL,
+    )
+    topics = result.get("topics", [])
+    topics.sort(key=lambda t: -t.get("importance", 0))
+    logger.info(f"Clustering: {len(topics)} sujets identifiés")
+    return topics
+
+
+async def _generate_search_queries(topic: dict,
+                                    llm_client: openai.OpenAI, model: str) -> list[str]:
+    result = await _llm(
+        llm_client, model,
+        system=(
+            "Tu es journaliste d'investigation. Génère exactement 10 requêtes de recherche web "
+            "pour approfondir un sujet d'actualité selon les 10 angles imposés. "
+            "Formule des requêtes efficaces pour un moteur d'actualités. "
+            "Réponds en appelant generate_search_queries."
+        ),
+        user=(
+            f"Sujet: {topic['title']}\n"
+            f"Catégorie: {topic['category']}\n"
+            f"Faits clés: {topic['key_facts']}"
+        ),
+        tool=_SEARCH_QUERIES_TOOL,
+    )
+    queries = result.get("queries", [])
+    if not queries:
+        queries = [topic["title"]]
+    return queries[:SEARCH_QUERIES_PER_TOPIC]
+
+
+async def _generate_deep_dive(topic: dict, articles: list[RawArticle],
+                               search_results: list[dict],
+                               llm_client: openai.OpenAI, model: str) -> dict:
+    # Gather relevant article bodies
+    indices = topic.get("article_indices", [])
+    article_excerpts = []
+    for idx in indices[:6]:
+        if 0 <= idx < len(articles):
+            a = articles[idx]
+            excerpt = f"[{a.publisher}] {a.title}\n{a.body[:MAX_BODY_IN_DEEP_DIVE]}"
+            article_excerpts.append(excerpt)
+
+    # Gather search reports
+    search_excerpts = []
+    for r in search_results:
+        report = (r.get("report") or "").strip()
+        if report:
+            search_excerpts.append(report[:MAX_SEARCH_REPORT_IN_DEEP_DIVE])
+
+    articles_block = "\n\n---\n\n".join(article_excerpts) or "(aucun extrait)"
+    searches_block = "\n\n---\n\n".join(search_excerpts) or "(aucun résultat)"
+
+    user_content = (
+        f"SUJET: {topic['title']}\n"
+        f"CATÉGORIE: {topic['category']}\n"
+        f"FAITS INITIAUX: {topic['key_facts']}\n\n"
+        f"=== EXTRAITS D'ARTICLES ({len(article_excerpts)}) ===\n{articles_block}\n\n"
+        f"=== RÉSULTATS DE RECHERCHE ({len(search_excerpts)}) ===\n{searches_block}"
+    )
+
+    result = await _llm(
+        llm_client, model,
+        system=(
+            "Tu es un expert journaliste du Monde diplomatique. Tu reçois des extraits d'articles "
+            "et des résultats de recherches approfondies sur un sujet d'actualité. "
+            "Rédige une analyse complète en français: faits précis avec chiffres, contexte historique, "
+            "enjeux, perspectives EU et US, ce qu'il faut retenir. "
+            "Ton oral, sérieux, factuel, sans liste ni tirets. "
+            "Appelle generate_analysis."
+        ),
+        user=user_content,
+        tool=_DEEP_DIVE_TOOL,
+    )
+
+    return {
+        "title": topic["title"],
+        "category": topic["category"],
+        "importance": topic.get("importance", 5),
+        "summary": result.get("summary", topic["key_facts"]),
+        "deep_dive": result.get("deep_dive", ""),
+        "what_to_watch": result.get("what_to_watch", ""),
+        "sources": result.get("sources", []),
+    }
+
+
+async def _generate_flash(topics: list[dict],
+                           llm_client: openai.OpenAI, model: str) -> tuple[str, str]:
+    top = topics[:10]
+    topics_text = "\n".join(
+        f"- [{t['category']}] {t['title']}: {t.get('summary', t.get('key_facts', ''))[:200]}"
+        for t in top
+    )
+    result = await _llm(
+        llm_client, model,
+        system=(
+            "Tu es présentateur du journal de 20h. Rédige le titre et le flash info du jour "
+            "à partir des sujets principaux. Style TV, oral, percutant, factuel. "
+            "Appelle generate_flash."
+        ),
+        user=f"Sujets du jour:\n\n{topics_text}",
+        tool=_FLASH_TOOL,
+    )
+    headline = result.get("headline", "L'actualité du jour")
+    flash = result.get("flash", "")
+    return headline, flash
+
+
+def _assemble_bulletin(flash: str, headline: str, topics: list[dict]) -> dict:
+    categories: dict[str, list[dict]] = {c: [] for c in CATEGORIES}
+    for t in topics:
+        cat = t.get("category", "International")
+        if cat not in categories:
+            cat = "International"
+        categories[cat].append(t)
+    # Remove empty categories
+    categories = {k: v for k, v in categories.items() if v}
+    return {
+        "flash": flash,
+        "headline": headline,
+        "categories": categories,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Main entry point
+# ---------------------------------------------------------------------------
+
+async def generate_bulletin(articles: list[RawArticle], search_client: SearchClient,
+                             llm_client: openai.OpenAI, model: str) -> dict:
+    logger.info(f"Génération bulletin: {len(articles)} articles")
+
+    # Step 1: Cluster into topics
+    topics = await _cluster_topics(articles, llm_client, model)
+    if not topics:
+        logger.error("Aucun sujet identifié")
+        return {}
+
+    # Step 2-4: For each topic, generate queries, search, build deep dive
+    enriched_topics = []
+    for i, topic in enumerate(topics):
+        logger.info(f"  [{i+1}/{len(topics)}] {topic['title']!r} ({topic['category']})")
+
+        queries = await _generate_search_queries(topic, llm_client, model)
+        logger.info(f"    → {len(queries)} requêtes, lancement des recherches...")
+
+        search_results = await search_client.search_many(queries, "news")
+        n_results = sum(1 for r in search_results if r.get("report"))
+        logger.info(f"    → {n_results}/{len(queries)} résultats obtenus")
+
+        deep = await _generate_deep_dive(topic, articles, search_results, llm_client, model)
+        enriched_topics.append(deep)
+
+    # Step 5: Flash
+    headline, flash = await _generate_flash(enriched_topics, llm_client, model)
+
+    # Step 6: Assemble
+    bulletin = _assemble_bulletin(flash, headline, enriched_topics)
+    logger.info(
+        f"Bulletin généré: {sum(len(v) for v in bulletin['categories'].values())} sujets "
+        f"en {len(bulletin['categories'])} catégories"
+    )
+    return bulletin
+
+
+# ---------------------------------------------------------------------------
+# Question answering
+# ---------------------------------------------------------------------------
+
+async def answer_question(query: str, bulletin: dict, search_client: SearchClient,
+                           llm_client: openai.OpenAI, model: str) -> str:
+    # Flatten all topics from bulletin
+    all_topics = []
+    for stories in bulletin.get("categories", {}).values():
+        all_topics.extend(stories)
+
+    if not all_topics:
+        return "Aucun bulletin disponible pour répondre à cette question."
+
+    topics_summary = "\n".join(
+        f"[{t['category']}] {t['title']}: {t.get('summary', '')[:300]}"
+        for t in all_topics
+    )
+
+    # Find relevant topics + decide if web search needed
+    result = await _llm(
+        llm_client, model,
+        system=(
+            "Tu es un expert en actualités. Tu as accès au bulletin du jour. "
+            "Réponds à la question posée en utilisant les informations disponibles. "
+            "Si le sujet n'est pas couvert dans le bulletin, indique needs_web_search=true. "
+            "Appelle answer_question."
+        ),
+        user=(
+            f"Question: {query}\n\n"
+            f"Bulletin du jour:\n{topics_summary}"
+        ),
+        tool=_ANSWER_TOOL,
+    )
+
+    answer = result.get("answer", "")
+    needs_search = result.get("needs_web_search", False)
+
+    if needs_search or not answer:
+        logger.info(f"Question '{query[:50]}' → recherche web complémentaire")
+        search_results = await search_client.search_many(
+            [query, f"{query} actualité récente", f"{query} news"], "news"
+        )
+        reports = [r.get("report", "") for r in search_results if r.get("report")]
+        if reports:
+            search_block = "\n\n".join(r[:600] for r in reports[:5])
+            result2 = await _llm(
+                llm_client, model,
+                system=(
+                    "Tu es expert en actualités. Réponds à la question en français "
+                    "à partir des résultats de recherche fournis. Ton oral, factuel. "
+                    "Appelle answer_question avec needs_web_search=false."
+                ),
+                user=f"Question: {query}\n\nRecherches:\n{search_block}",
+                tool=_ANSWER_TOOL,
+            )
+            answer = result2.get("answer", answer)
+
+    return answer or "Je n'ai pas trouvé d'information sur ce sujet dans l'actualité récente."

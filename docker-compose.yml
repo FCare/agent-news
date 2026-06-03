@@ -1,0 +1,16 @@
+services:
+  agent-news:
+    build: .
+    container_name: agent-news
+    env_file: .env
+    volumes:
+      - news-data:/data
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  news-data:
