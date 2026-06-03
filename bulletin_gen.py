@@ -25,7 +25,7 @@ CATEGORIES = [
 # Context budget: 128k tokens available.
 # Worst-case deep dive: 8 articles × 3 000 chars + 10 searches × 2 000 chars
 # ≈ (24 000 + 20 000) / 4 ≈ 11 000 tokens — well within limit.
-MAX_ARTICLES_FOR_CLUSTER = 200       # titles only (~100 chars each → ~5 000 tokens)
+MAX_ARTICLES_FOR_CLUSTER = 80        # titles only — beyond this, topics repeat
 MAX_BODY_IN_DEEP_DIVE = 3000         # full article body (matches crawler MAX_BODY_CHARS)
 MAX_ARTICLES_IN_DEEP_DIVE = 8        # max articles per topic in deep dive
 MAX_SEARCH_REPORT_IN_DEEP_DIVE = 2000  # richer search context
@@ -70,12 +70,8 @@ _CLUSTER_TOOL = [{
                                 "items": {"type": "integer"},
                                 "description": "Indices (0-based) des articles couvrant ce sujet"
                             },
-                            "key_facts": {
-                                "type": "string",
-                                "description": "2-3 faits clés en français, base pour le bulletin"
-                            },
                         },
-                        "required": ["title", "category", "importance", "article_indices", "key_facts"],
+                        "required": ["title", "category", "importance", "article_indices"],
                     }
                 }
             },
@@ -281,8 +277,7 @@ async def _generate_search_queries(topic: dict,
         ),
         user=(
             f"Sujet: {topic['title']}\n"
-            f"Catégorie: {topic['category']}\n"
-            f"Faits clés: {topic['key_facts']}"
+            f"Catégorie: {topic['category']}"
         ),
         tool=_SEARCH_QUERIES_TOOL,
     )
@@ -320,7 +315,7 @@ async def _generate_deep_dive(topic: dict, articles: list[RawArticle],
     user_content = (
         f"SUJET: {topic['title']}\n"
         f"CATÉGORIE: {topic['category']}\n"
-        f"FAITS INITIAUX: {topic['key_facts']}\n\n"
+        f"FAITS INITIAUX: (voir les articles ci-dessous)\n\n"
         f"=== EXTRAITS D'ARTICLES ({len(article_excerpts)}) ===\n{articles_block}\n\n"
         f"=== RÉSULTATS DE RECHERCHE ({len(search_excerpts)}) ===\n{searches_block}"
     )
@@ -339,7 +334,7 @@ async def _generate_deep_dive(topic: dict, articles: list[RawArticle],
         tool=_DEEP_DIVE_TOOL,
     )
 
-    summary   = result.get("summary",       topic["key_facts"])
+    summary   = result.get("summary",       topic["title"])
     deep_dive = result.get("deep_dive",     "")
     watch     = result.get("what_to_watch", "")
     sources   = result.get("sources",       [])
@@ -364,7 +359,7 @@ async def _generate_flash(topics: list[dict],
                            llm_client: openai.OpenAI, model: str) -> tuple[str, str]:
     top = topics[:10]
     topics_text = "\n".join(
-        f"- [{t['category']}] {t['title']}: {t.get('summary', t.get('key_facts', ''))[:200]}"
+        f"- [{t['category']}] {t['title']}: {t.get('summary', '')[:200]}"
         for t in top
     )
     result = await _llm(
