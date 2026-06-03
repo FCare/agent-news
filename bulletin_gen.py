@@ -373,7 +373,10 @@ async def _generate_flash(topics: list[dict],
         llm_client, model,
         system=(
             "Tu es présentateur du journal de 20h. Rédige le titre et le flash info du jour "
-            "à partir des sujets principaux. Style TV, oral, percutant, factuel. "
+            "à partir des sujets principaux. Style oral, percutant, factuel. "
+            "INTERDIT : toute formule de transition comme 'à suivre', 'restez avec nous', "
+            "'dans les prochaines minutes', 'nous allons voir', 'on en parle'. "
+            "Le flash se termine sur un fait, pas une promesse. "
             "Appelle generate_flash."
         ),
         user=f"Sujets du jour:\n\n{topics_text}",
