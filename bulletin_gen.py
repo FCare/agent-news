@@ -297,15 +297,44 @@ async def _generate_search_queries(topic: dict,
     return queries
 
 
+def _fmt_date(dt) -> str:
+    if not dt:
+        return ""
+    try:
+        from zoneinfo import ZoneInfo
+        if dt.tzinfo is None:
+            from datetime import timezone as _tz
+            dt = dt.replace(tzinfo=_tz.utc)
+        dt = dt.astimezone(ZoneInfo("Europe/Paris"))
+        return dt.strftime("%-d %b %Y %Hh%M")
+    except Exception:
+        return str(dt)[:16]
+
+
 async def _generate_deep_dive(topic: dict, articles: list[RawArticle],
                                search_results: list[dict],
                                llm_client: openai.OpenAI, model: str) -> dict:
-    # Find relevant articles via keyword matching (no LLM indices needed)
+    # Find relevant articles — include publication date in excerpts
     matched = _find_articles_for_topic(topic, articles)
-    article_excerpts = [
-        f"[{a.publisher}] {a.title}\n{a.body[:MAX_BODY_IN_DEEP_DIVE]}"
-        for a in matched
-    ]
+    article_excerpts = []
+    article_dates = []
+    for a in matched:
+        date_tag = _fmt_date(a.published_at)
+        article_dates.append(a.published_at)
+        header = f"[{a.publisher}{' — ' + date_tag if date_tag else ''}] {a.title}"
+        article_excerpts.append(f"{header}\n{a.body[:MAX_BODY_IN_DEEP_DIVE]}")
+
+    # Date range of sources
+    valid_dates = [d for d in article_dates if d]
+    if valid_dates:
+        from datetime import timezone as _tz
+        def _to_utc(d):
+            return d.replace(tzinfo=_tz.utc) if d.tzinfo is None else d
+        oldest = min(valid_dates, key=_to_utc)
+        newest = max(valid_dates, key=_to_utc)
+        date_range = f"{_fmt_date(oldest)} → {_fmt_date(newest)}"
+    else:
+        date_range = ""
 
     # Gather search reports
     search_excerpts = []
@@ -320,8 +349,8 @@ async def _generate_deep_dive(topic: dict, articles: list[RawArticle],
     user_content = (
         f"SUJET: {topic['title']}\n"
         f"CATÉGORIE: {topic['category']}\n"
-        f"FAITS INITIAUX: (voir les articles ci-dessous)\n\n"
-        f"=== EXTRAITS D'ARTICLES ({len(article_excerpts)}) ===\n{articles_block}\n\n"
+        + (f"PÉRIODE DES SOURCES: {date_range}\n" if date_range else "")
+        + f"\n=== EXTRAITS D'ARTICLES ({len(article_excerpts)}) ===\n{articles_block}\n\n"
         f"=== RÉSULTATS DE RECHERCHE ({len(search_excerpts)}) ===\n{searches_block}"
     )
 
@@ -351,13 +380,14 @@ async def _generate_deep_dive(topic: dict, articles: list[RawArticle],
     if sources:
         logger.info(f"  sources  : {', '.join(sources)}")
     return {
-        "title":       topic["title"],
-        "category":    topic["category"],
-        "importance":  topic.get("importance", 5),
-        "summary":     summary,
-        "deep_dive":   deep_dive,
+        "title":        topic["title"],
+        "category":     topic["category"],
+        "importance":   topic.get("importance", 5),
+        "date_range":   date_range,
+        "summary":      summary,
+        "deep_dive":    deep_dive,
         "what_to_watch": watch,
-        "sources":     sources,
+        "sources":      sources,
     }
 
 

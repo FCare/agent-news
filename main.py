@@ -186,9 +186,11 @@ def _format_deep_dive(bulletin_row: dict, topic_query: str) -> str:
     if not best:
         return "Sujet introuvable dans le bulletin."
 
+    date_range = best.get("date_range", "")
     parts = [
         f"[{date}] {best['title']}",
-        f"Catégorie: {best.get('category', '?')}",
+        f"Catégorie: {best.get('category', '?')}"
+        + (f"  ·  Sources du {date_range}" if date_range else ""),
         "",
         best.get("summary", ""),
         "",
