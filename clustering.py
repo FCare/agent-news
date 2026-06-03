@@ -29,7 +29,7 @@ CATEGORIES = [
     "Informatique & IA",
     "Science & Technologie",
     "Société & Environnement",
-    "Littérature & BD",
+    "Culture & Médias",
 ]
 
 _CATEGORY_KEYWORDS: list[tuple[str, list[str]]] = [
@@ -73,12 +73,26 @@ _CATEGORY_KEYWORDS: list[tuple[str, list[str]]] = [
         "allemagne", "germany", "italie", "italy", "espagne", "spain",
         "royaume-uni", "uk", "britain", "brexit", "pologne", "hongrie",
     ]),
-    ("Littérature & BD", [
+    ("Culture & Médias", [
+        # Cinéma & séries
+        "film", "cinéma", "cinema", "movie", "série", "series", "netflix", "amazon prime",
+        "disney", "hbo", "streaming", "oscar", "césar", "festival", "cannes",
+        "réalisateur", "acteur", "actrice", "box office",
+        # Musique
+        "musique", "music", "album", "concert", "tournée", "tour", "chanteur",
+        "chanteuse", "groupe", "grammy", "victoires de la musique", "spotify",
+        # People & célébrités
+        "célébrité", "people", "personnalité", "show business", "showbiz",
+        "people", "star", "vedette", "influenceur", "influencer",
+        # Jeux vidéo
+        "jeu vidéo", "video game", "gaming", "playstation", "xbox", "nintendo",
+        "steam", "e-sport", "esport",
+        # Littérature & BD
         "livre", "book", "roman", "novel", "auteur", "author", "écrivain",
         "bd", "bande dessinée", "manga", "comic", "comics", "graphic novel",
         "littérature", "literature", "prix littéraire", "booker", "goncourt",
-        "film", "cinéma", "série", "netflix", "disney", "marvel", "dc",
-        "musique", "music", "album", "concert",
+        # Médias
+        "presse", "journal", "media", "médias", "journaliste", "télévision", "radio",
     ]),
     ("Société & Environnement", [
         "climat", "climate", "environnement", "environment", "écologie", "ecology",

@@ -19,7 +19,7 @@ CATEGORIES = [
     "Informatique & IA",
     "Science & Technologie",
     "Société & Environnement",
-    "Littérature & BD",
+    "Culture & Médias",
 ]
 
 # Context budget: 128k tokens available.
