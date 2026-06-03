@@ -1,13 +1,19 @@
 import asyncio
+import html
 import logging
+import re
+import urllib.request
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from datetime import datetime
+from email.utils import parsedate_to_datetime
 from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
 MAX_BODY_CHARS = 3000
-MAX_ARTICLES = 300
+MAX_ARTICLES_FUNDUS = 300
+MAX_ARTICLES_PER_FEED = 20
 
 # Domain → (publisher name, country)
 DOMAIN_MAP = {
@@ -36,11 +42,51 @@ DOMAIN_MAP = {
     "lefigaro.fr":         ("Le Figaro", "FR"),
     "liberation.fr":       ("Libération", "FR"),
     "leparisien.fr":       ("Le Parisien", "FR"),
+    "korben.info":         ("Korben", "FR"),
+    "nextinpact.com":      ("Next Inpact", "FR"),
+    "numerama.com":        ("Numerama", "FR"),
+    "phoronix.com":        ("Phoronix", "US"),
+    "arstechnica.com":     ("Ars Technica", "US"),
+    "linuxfr.org":         ("LinuxFR", "FR"),
     "elpais.com":          ("El País", "ES"),
     "elmundo.es":          ("El Mundo", "ES"),
     "aljazeera.com":       ("Al Jazeera", "INTL"),
     "reuters.com":         ("Reuters", "INTL"),
 }
+
+# RSS/Atom feeds to crawl in addition to fundus
+# (url, publisher_name, country)
+RSS_FEEDS = [
+    # ── Actualités générales FR ──────────────────────────────────────────
+    ("https://www.lemonde.fr/rss/une.xml",                              "Le Monde",        "FR"),
+    ("https://www.lefigaro.fr/rss/figaro_actualites.xml",               "Le Figaro",       "FR"),
+    ("https://www.liberation.fr/arc/outboundfeeds/rss/",                "Libération",      "FR"),
+    ("https://www.francetvinfo.fr/titres.rss",                          "France TV Info",  "FR"),
+    ("https://www.bfmtv.com/rss/info/flux-rss/flux-toutes-les-actualites/", "BFM TV",     "FR"),
+    # ── Tech & IT FR ─────────────────────────────────────────────────────
+    ("https://korben.info/feed",                                        "Korben",          "FR"),
+    ("https://www.nextinpact.com/rss",                                  "Next Inpact",     "FR"),
+    ("https://www.numerama.com/feed/",                                  "Numerama",        "FR"),
+    ("https://www.01net.com/feed/",                                     "01net",           "FR"),
+    ("https://www.zdnet.fr/feeds/rss/actualites/",                      "ZDNet FR",        "FR"),
+    ("https://www.frandroid.com/feed",                                  "Frandroid",       "FR"),
+    ("https://linuxfr.org/news.atom",                                   "LinuxFR",         "FR"),
+    # ── Tech & IT EN ─────────────────────────────────────────────────────
+    ("https://arstechnica.com/feed/",                                   "Ars Technica",    "US"),
+    ("https://www.theverge.com/rss/index.xml",                          "The Verge",       "US"),
+    ("https://www.phoronix.com/rss.php",                                "Phoronix",        "US"),
+    ("https://theregister.com/headlines.atom",                          "The Register",    "UK"),
+    ("https://slashdot.org/rss/slashdot.rss",                           "Slashdot",        "US"),
+    ("https://hackaday.com/blog/feed/",                                 "Hackaday",        "US"),
+    ("https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml",     "NYT Tech",        "US"),
+    # ── Science ──────────────────────────────────────────────────────────
+    ("https://www.sciencesetavenir.fr/rss.xml",                         "Sciences et Avenir", "FR"),
+    ("https://www.newscientist.com/feed/home/",                         "New Scientist",   "UK"),
+    # ── Europe & Politique ───────────────────────────────────────────────
+    ("https://politico.eu/feed/",                                       "Politico EU",     "EU"),
+    # ── BD & Littérature ─────────────────────────────────────────────────
+    ("https://actuabd.com/feed/",                                       "ActuaBD",         "FR"),
+]
 
 REGIONS = ["us", "uk", "de", "fr", "es", "at", "ch", "nl"]
 
@@ -73,14 +119,114 @@ def _get_publisher_info(url: str) -> tuple[str, str]:
     return ("Unknown", "?")
 
 
+def _strip_html(text: str) -> str:
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = html.unescape(text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _parse_date(date_str: str | None) -> datetime | None:
+    if not date_str:
+        return None
+    try:
+        return parsedate_to_datetime(date_str)
+    except Exception:
+        try:
+            return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+
+def _fetch_rss(url: str, publisher: str, country: str) -> list[RawArticle]:
+    NS = {
+        "content": "http://purl.org/rss/1.0/modules/content/",
+        "atom":    "http://www.w3.org/2005/Atom",
+        "dc":      "http://purl.org/dc/elements/1.1/",
+    }
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "agent-news/1.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            raw_xml = resp.read()
+    except Exception as e:
+        logger.warning(f"RSS fetch failed ({publisher}): {e}")
+        return []
+
+    try:
+        root = ET.fromstring(raw_xml)
+    except ET.ParseError as e:
+        logger.warning(f"RSS parse error ({publisher}): {e}")
+        return []
+
+    articles = []
+
+    # RSS 2.0
+    items = root.findall(".//item")
+    # Atom
+    if not items:
+        atom_ns = "http://www.w3.org/2005/Atom"
+        items = root.findall(f".//{{{atom_ns}}}entry")
+
+    for item in items[:MAX_ARTICLES_PER_FEED]:
+        try:
+            # Title
+            title_el = item.find("title") or item.find(f"{{{atom_ns}}}title")
+            title = _strip_html(title_el.text or "") if title_el is not None else ""
+
+            # URL
+            link_el = item.find("link")
+            if link_el is not None:
+                article_url = (link_el.text or "").strip()
+            else:
+                link_el = item.find(f"{{{atom_ns}}}link")
+                article_url = (link_el.get("href", "") if link_el is not None else "")
+
+            # Body: prefer content:encoded, then description
+            body = ""
+            ce = item.find("content:encoded", NS)
+            if ce is not None and ce.text:
+                body = _strip_html(ce.text)
+            if not body:
+                desc = item.find("description") or item.find(f"{{{atom_ns}}}summary") or item.find(f"{{{atom_ns}}}content")
+                if desc is not None and desc.text:
+                    body = _strip_html(desc.text)
+
+            # Date
+            pub_el = item.find("pubDate") or item.find(f"{{{atom_ns}}}published") or item.find("dc:date", NS)
+            published_at = _parse_date(pub_el.text if pub_el is not None else None)
+
+            if not title or len(body) < 100:
+                continue
+
+            articles.append(RawArticle(
+                url=article_url,
+                title=title,
+                body=body[:MAX_BODY_CHARS],
+                publisher=publisher,
+                country=country,
+                published_at=published_at,
+            ))
+        except Exception as e:
+            logger.debug(f"RSS item skip ({publisher}): {e}")
+
+    return articles
+
+
+def _crawl_rss_feeds() -> list[RawArticle]:
+    articles = []
+    for feed_url, publisher, country in RSS_FEEDS:
+        feed_articles = _fetch_rss(feed_url, publisher, country)
+        articles.extend(feed_articles)
+        logger.info(f"  RSS {publisher}: {len(feed_articles)} articles")
+    return articles
+
+
 def _silence_fundus_loggers() -> None:
-    """Mute fundus sub-loggers after import (they register themselves on import)."""
     for name in list(logging.Logger.manager.loggerDict.keys()):
         if name.startswith("fundus"):
             logging.getLogger(name).setLevel(logging.ERROR)
 
 
-def _crawl_sync() -> list[RawArticle]:
+def _crawl_fundus() -> list[RawArticle]:
     try:
         from fundus import Crawler, PublisherCollection
     except ImportError:
@@ -96,28 +242,22 @@ def _crawl_sync() -> list[RawArticle]:
             collections.append(coll)
 
     if not collections:
-        logger.error("Aucune collection fundus disponible")
         return []
 
-    logger.info(f"Crawl: {len(collections)} régions, max {MAX_ARTICLES} articles")
     articles = []
     n_seen = n_skip_body = n_skip_short = n_error = 0
 
     try:
         crawler = Crawler(*collections)
-        for raw in crawler.crawl(max_articles=MAX_ARTICLES, timeout=90):
+        for raw in crawler.crawl(max_articles=MAX_ARTICLES_FUNDUS, timeout=90):
             n_seen += 1
             try:
-                # URL
                 try:
                     url = str(raw.html.responded_url)
                 except AttributeError:
                     url = str(raw.html.requested_url)
 
-                # Title
                 title = (raw.title or "").strip()
-
-                # Body — try .text, fall back to str()
                 body = ""
                 if raw.body is not None:
                     try:
@@ -136,11 +276,8 @@ def _crawl_sync() -> list[RawArticle]:
 
                 publisher, country = _get_publisher_info(url)
                 articles.append(RawArticle(
-                    url=url,
-                    title=title,
-                    body=body[:MAX_BODY_CHARS],
-                    publisher=publisher,
-                    country=country,
+                    url=url, title=title, body=body[:MAX_BODY_CHARS],
+                    publisher=publisher, country=country,
                     published_at=raw.publishing_date,
                 ))
             except Exception as e:
@@ -151,10 +288,31 @@ def _crawl_sync() -> list[RawArticle]:
         logger.error(f"Erreur crawl fundus: {e}")
 
     logger.info(
-        f"Crawl terminé: {n_seen} reçus → {len(articles)} valides "
+        f"  fundus: {len(articles)}/{n_seen} articles valides "
         f"({n_skip_body} sans body, {n_skip_short} trop courts, {n_error} erreurs)"
     )
     return articles
+
+
+def _crawl_sync() -> list[RawArticle]:
+    logger.info(f"Crawl RSS ({len(RSS_FEEDS)} flux)...")
+
+    rss_articles = _crawl_rss_feeds()
+
+    logger.info(f"Crawl fundus ({len(REGIONS)} régions, max {MAX_ARTICLES_FUNDUS})...")
+    fundus_articles = _crawl_fundus()
+
+    # Deduplicate by URL
+    seen_urls: set[str] = set()
+    all_articles = []
+    for a in rss_articles + fundus_articles:
+        if a.url and a.url not in seen_urls:
+            seen_urls.add(a.url)
+            all_articles.append(a)
+
+    logger.info(f"Crawl terminé: {len(all_articles)} articles uniques "
+                f"(RSS: {len(rss_articles)}, fundus: {len(fundus_articles)})")
+    return all_articles
 
 
 async def crawl_articles() -> list[RawArticle]:
