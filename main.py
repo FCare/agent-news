@@ -262,16 +262,14 @@ async def on_user_connected(topic: str, payload) -> None:
                 "topic": request_topic,
                 "description": (
                     "Source EXCLUSIVE d'actualités en temps réel. "
-                    "OBLIGATOIRE pour toute question sur l'actualité, les nouvelles du jour, "
-                    "les événements récents, la politique, l'économie, le sport, la science, la culture. "
-                    "Ne jamais répondre à une question d'actualité sans consulter ce service en premier. "
-                    "Types disponibles : "
-                    "flash (résumé des 3 sujets du jour en 3 phrases), "
-                    "bulletin (journal complet par catégories), "
-                    "category (sujets d'une catégorie : International, Europe, France, Économie, Géopolitique, Informatique, Science, Société, Culture), "
-                    "deep_dive (analyse approfondie d'un sujet précis, avec champ 'topic'), "
-                    "question (question libre en langage naturel sur l'actu du jour, avec champ 'query'), "
-                    "history (liste des bulletins archivés)."
+                    "OBLIGATOIRE pour toute question sur l'actualité, les nouvelles, les événements récents. "
+                    "Choisis le type selon l'intention : "
+                    "flash → quoi de neuf, résumé rapide, les grandes lignes (ex: 'quelles sont les nouvelles ?', 'quoi de neuf ?', 'résume l\\'actu') ; "
+                    "bulletin → journal complet, toutes les catégories (ex: 'donne-moi le journal', 'toutes les nouvelles du jour') ; "
+                    "category → actualité d\\'un domaine précis (ex: 'les nouvelles en Europe', 'l\\'actu tech', 'que se passe-t-il en France ?') ; "
+                    "deep_dive → analyse approfondie d\\'un sujet nommé, utilise le champ topic (ex: 'parle-moi de X', 'dis-m\\'en plus sur Y') ; "
+                    "question → question ouverte sur l\\'actu, utilise le champ query (ex: 'est-ce que Z a eu lieu ?', 'qu\\'est-il arrivé à W ?') ; "
+                    "history → bulletins des jours précédents (ex: 'les nouvelles d\\'hier', 'bulletin du 2 juin')."
                 ),
                 "access": "write",
                 "response_topic": result_topic,
