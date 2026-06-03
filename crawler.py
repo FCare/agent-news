@@ -101,18 +101,37 @@ def _crawl_sync() -> list[RawArticle]:
 
     logger.info(f"Crawl: {len(collections)} régions, max {MAX_ARTICLES} articles")
     articles = []
+    n_seen = n_skip_body = n_skip_short = n_error = 0
 
     try:
         crawler = Crawler(*collections)
         for raw in crawler.crawl(max_articles=MAX_ARTICLES, timeout=90):
+            n_seen += 1
             try:
-                url = str(raw.html.responded_url)
-                title = (raw.title or "").strip()
-                body = ""
-                if raw.body:
-                    body = (raw.body.text or "").strip()
+                # URL
+                try:
+                    url = str(raw.html.responded_url)
+                except AttributeError:
+                    url = str(raw.html.requested_url)
 
-                if not title or len(body) < 100:
+                # Title
+                title = (raw.title or "").strip()
+
+                # Body — try .text, fall back to str()
+                body = ""
+                if raw.body is not None:
+                    try:
+                        body = (raw.body.text or "").strip()
+                    except AttributeError:
+                        body = str(raw.body).strip()
+
+                if not body:
+                    n_skip_body += 1
+                    continue
+                if len(body) < 100:
+                    n_skip_short += 1
+                    continue
+                if not title:
                     continue
 
                 publisher, country = _get_publisher_info(url)
@@ -125,11 +144,16 @@ def _crawl_sync() -> list[RawArticle]:
                     published_at=raw.publishing_date,
                 ))
             except Exception as e:
-                logger.debug(f"Article ignoré: {e}")
+                n_error += 1
+                if n_error <= 3:
+                    logger.warning(f"Article ignoré ({type(e).__name__}): {e}")
     except Exception as e:
         logger.error(f"Erreur crawl fundus: {e}")
 
-    logger.info(f"Crawl terminé: {len(articles)} articles valides")
+    logger.info(
+        f"Crawl terminé: {n_seen} reçus → {len(articles)} valides "
+        f"({n_skip_body} sans body, {n_skip_short} trop courts, {n_error} erreurs)"
+    )
     return articles
 
 
