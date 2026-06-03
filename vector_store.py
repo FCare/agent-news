@@ -116,6 +116,7 @@ def upsert_bulletin_topics(bulletin_json: dict, date: str) -> None:
                     "title":        title,
                     "category":     s.get("category", ""),
                     "date":         date,
+                    "date_int":     int(date.replace("-", "")),  # YYYYMMDD for numeric filtering
                     "what_to_watch": s.get("what_to_watch", ""),
                     "sources":      ", ".join(s.get("sources", [])),
                 })
@@ -166,14 +167,15 @@ def search_articles(query: str, n_results: int = 8) -> list[dict]:
 def purge_old_topics(retention_days: int = 90) -> None:
     """Delete bulletin topics older than retention_days. Mirrors SQLite bulletin retention."""
     from datetime import timedelta
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).strftime("%Y-%m-%d")
+    cutoff_dt = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    cutoff_int = int(cutoff_dt.strftime("%Y%m%d"))
     try:
         col = _topics_collection()
         before = col.count()
-        col.delete(where={"date": {"$lt": cutoff}})
+        col.delete(where={"date_int": {"$lt": cutoff_int}})
         deleted = before - col.count()
         if deleted:
-            logger.info(f"ChromaDB: {deleted} topics supprimés (antérieurs au {cutoff})")
+            logger.info(f"ChromaDB: {deleted} topics supprimés (antérieurs au {cutoff_dt.strftime('%Y-%m-%d')})")
     except Exception as e:
         logger.error(f"ChromaDB purge topics failed: {e}")
 

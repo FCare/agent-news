@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 
 import openai
 
@@ -27,11 +28,11 @@ CATEGORIES = [
 # Context budget: 128k tokens available.
 # Worst-case deep dive: 8 articles × 3 000 chars + 10 searches × 2 000 chars
 # ≈ (24 000 + 20 000) / 4 ≈ 11 000 tokens — well within limit.
-MAX_TOPICS = 25                      # cap after TF-IDF clustering — 25 × 5 × 17s ≈ 35 min
+MAX_TOPICS = int(os.environ.get("MAX_TOPICS", 25))  # cap after TF-IDF clustering
 MAX_BODY_IN_DEEP_DIVE = 3000         # full article body (matches crawler MAX_BODY_CHARS)
 MAX_ARTICLES_IN_DEEP_DIVE = 8        # max articles per topic in deep dive
 MAX_SEARCH_REPORT_IN_DEEP_DIVE = 2000  # richer search context
-SEARCH_QUERIES_PER_TOPIC = 5         # 10 → 5 : corpus RSS déjà riche, web search = enrichissement
+SEARCH_QUERIES_PER_TOPIC = int(os.environ.get("SEARCH_QUERIES_PER_TOPIC", 5))
 
 # ---------------------------------------------------------------------------
 # Tool definitions
@@ -124,7 +125,7 @@ _FLASH_TOOL = [{
                     "type": "string",
                     "description": (
                         "3 phrases résumant les 3 sujets les plus importants du jour. "
-                        "Commence par 'Ce soir au journal...'. Style présentateur TV."
+                        "Style factuel et direct, sans formule d'introduction."
                     )
                 },
             },
@@ -432,11 +433,11 @@ async def _generate_flash(topics: list[dict],
     result = await _llm(
         llm_client, model,
         system=(
-            "Tu es présentateur du journal de 20h. Rédige le titre et le flash info du jour "
-            "à partir des sujets principaux. Style oral, percutant, factuel. "
-            "INTERDIT : toute formule de transition comme 'à suivre', 'restez avec nous', "
-            "'dans les prochaines minutes', 'nous allons voir', 'on en parle'. "
-            "Le flash se termine sur un fait, pas une promesse. "
+            "Rédige un titre accrocheur et un flash info du jour à partir des sujets principaux. "
+            "Style factuel et direct. "
+            "INTERDIT : toute formule d'introduction ('Ce soir', 'Bonsoir', 'Au programme'), "
+            "toute formule de transition ('à suivre', 'restez avec nous', 'on en parle'). "
+            "Commence directement par les faits. Le flash se termine sur un fait, pas une promesse. "
             "Appelle generate_flash."
         ),
         user=f"Sujets du jour:\n\n{topics_text}",
