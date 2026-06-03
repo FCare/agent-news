@@ -374,10 +374,7 @@ async def on_user_connected(topic: str, payload) -> None:
         else:
             content = f"Type inconnu: {req_type}. Disponibles: flash, bulletin, category, deep_dive, question, history."
 
-        nexus_user = NexusClient.from_api_key(
-            VK_URL, MQTT_HOST, SERVICE_USERNAME, SERVICE_API_KEY, MQTT_PORT
-        )
-        await nexus_user.publish(result_topic, {
+        await nexus.publish(result_topic, {
             "type": req_type,
             "content": content,
             "bulletin_date": bulletin_row["date"] if bulletin_row else "",
