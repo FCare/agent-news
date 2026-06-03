@@ -34,7 +34,6 @@ DOMAIN_MAP = {
     "sueddeutsche.de":     ("Süddeutsche Zeitung", "DE"),
     "lemonde.fr":          ("Le Monde", "FR"),
     "lefigaro.fr":         ("Le Figaro", "FR"),
-    "lesechos.fr":         ("Les Échos", "FR"),
     "liberation.fr":       ("Libération", "FR"),
     "leparisien.fr":       ("Le Parisien", "FR"),
     "elpais.com":          ("El País", "ES"),
@@ -75,6 +74,9 @@ def _get_publisher_info(url: str) -> tuple[str, str]:
 
 
 def _crawl_sync() -> list[RawArticle]:
+    # Silence fundus debug spam (robots.txt skips, etc.)
+    logging.getLogger("fundus").setLevel(logging.WARNING)
+
     try:
         from fundus import Crawler, PublisherCollection
     except ImportError:
