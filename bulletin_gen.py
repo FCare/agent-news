@@ -65,13 +65,13 @@ _CLUSTER_TOOL = [{
                                 "type": "integer",
                                 "description": "Score 1-10, 10 = sujet majeur du jour"
                             },
-                            "article_indices": {
+                            "keywords": {
                                 "type": "array",
-                                "items": {"type": "integer"},
-                                "description": "Indices (0-based) des articles couvrant ce sujet"
+                                "items": {"type": "string"},
+                                "description": "3-5 mots-clés en français et anglais pour retrouver les articles liés"
                             },
                         },
-                        "required": ["title", "category", "importance", "article_indices"],
+                        "required": ["title", "category", "importance", "keywords"],
                     }
                 }
             },
@@ -229,6 +229,25 @@ async def _llm(llm_client: openai.OpenAI, model: str, system: str,
 
 
 # ---------------------------------------------------------------------------
+# Article matching
+# ---------------------------------------------------------------------------
+
+def _find_articles_for_topic(topic: dict, articles: list[RawArticle],
+                              n: int = MAX_ARTICLES_IN_DEEP_DIVE) -> list[RawArticle]:
+    """Keyword-based matching: score each article against topic title + keywords."""
+    keywords = [w.lower() for w in topic.get("keywords", [])]
+    title_words = [w.lower() for w in topic["title"].split() if len(w) > 3]
+    all_terms = set(keywords + title_words)
+
+    def score(a: RawArticle) -> int:
+        text = (a.title + " " + a.body[:200]).lower()
+        return sum(1 for term in all_terms if term in text)
+
+    ranked = sorted(articles, key=score, reverse=True)
+    return [a for a in ranked[:n] if score(a) > 0] or ranked[:3]
+
+
+# ---------------------------------------------------------------------------
 # Pipeline steps
 # ---------------------------------------------------------------------------
 
@@ -307,14 +326,12 @@ async def _generate_search_queries(topic: dict,
 async def _generate_deep_dive(topic: dict, articles: list[RawArticle],
                                search_results: list[dict],
                                llm_client: openai.OpenAI, model: str) -> dict:
-    # Gather relevant article bodies
-    indices = topic.get("article_indices", [])
-    article_excerpts = []
-    for idx in indices[:MAX_ARTICLES_IN_DEEP_DIVE]:
-        if 0 <= idx < len(articles):
-            a = articles[idx]
-            excerpt = f"[{a.publisher}] {a.title}\n{a.body[:MAX_BODY_IN_DEEP_DIVE]}"
-            article_excerpts.append(excerpt)
+    # Find relevant articles via keyword matching (no LLM indices needed)
+    matched = _find_articles_for_topic(topic, articles)
+    article_excerpts = [
+        f"[{a.publisher}] {a.title}\n{a.body[:MAX_BODY_IN_DEEP_DIVE]}"
+        for a in matched
+    ]
 
     # Gather search reports
     search_excerpts = []

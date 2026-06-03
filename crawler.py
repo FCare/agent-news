@@ -58,34 +58,76 @@ DOMAIN_MAP = {
 # (url, publisher_name, country)
 RSS_FEEDS = [
     # ── Actualités générales FR ──────────────────────────────────────────
-    ("https://www.lemonde.fr/rss/une.xml",                              "Le Monde",        "FR"),
-    ("https://www.lefigaro.fr/rss/figaro_actualites.xml",               "Le Figaro",       "FR"),
-    ("https://www.liberation.fr/arc/outboundfeeds/rss/",                "Libération",      "FR"),
-    ("https://www.francetvinfo.fr/titres.rss",                          "France TV Info",  "FR"),
-    ("https://www.bfmtv.com/rss/info/flux-rss/flux-toutes-les-actualites/", "BFM TV",     "FR"),
+    ("https://www.lemonde.fr/rss/une.xml",                               "Le Monde",            "FR"),
+    ("https://www.lemonde.fr/economie/rss_full.xml",                     "Le Monde Éco",        "FR"),
+    ("https://www.lemonde.fr/sciences/rss_full.xml",                     "Le Monde Sciences",   "FR"),
+    ("https://www.lemonde.fr/pixels/rss_full.xml",                       "Le Monde Tech",       "FR"),
+    ("https://www.lefigaro.fr/rss/figaro_actualites.xml",                "Le Figaro",           "FR"),
+    ("https://www.liberation.fr/arc/outboundfeeds/rss/",                 "Libération",          "FR"),
+    ("https://www.francetvinfo.fr/titres.rss",                           "France TV Info",      "FR"),
+    ("https://www.franceinfo.fr/rss/rss-france.xml",                     "Franceinfo France",   "FR"),
+    ("https://www.franceinfo.fr/rss/rss-monde.xml",                      "Franceinfo Monde",    "FR"),
+    ("https://www.franceinfo.fr/rss/rss-economie.xml",                   "Franceinfo Éco",      "FR"),
+    ("https://www.franceinfo.fr/rss/rss-sciences.xml",                   "Franceinfo Sciences", "FR"),
+    ("https://www.franceinfo.fr/rss/rss-technologie.xml",                "Franceinfo Tech",     "FR"),
+    ("https://www.nouvelobs.com/rss",                                    "Le Nouvel Obs",       "FR"),
+    ("https://www.europe1.fr/rss.xml",                                   "Europe 1",            "FR"),
+    ("https://www.bfmtv.com/rss/info/flux-rss/flux-toutes-les-actualites/", "BFM TV",          "FR"),
+    # ── Actualités internationales ───────────────────────────────────────
+    ("https://www.france24.com/fr/rss",                                  "France 24 FR",        "FR"),
+    ("https://www.france24.com/en/rss",                                  "France 24 EN",        "FR"),
+    ("https://feeds.bbci.co.uk/news/rss.xml",                            "BBC News",            "UK"),
+    ("https://feeds.bbci.co.uk/news/world/rss.xml",                      "BBC World",           "UK"),
+    ("https://www.aljazeera.com/xml/rss/all.xml",                        "Al Jazeera",          "INTL"),
+    ("https://ecfr.eu/feed/",                                            "ECFR",                "EU"),
+    ("https://politico.eu/feed/",                                        "Politico EU",         "EU"),
     # ── Tech & IT FR ─────────────────────────────────────────────────────
-    ("https://korben.info/feed",                                        "Korben",          "FR"),
-    ("https://www.nextinpact.com/rss",                                  "Next Inpact",     "FR"),
-    ("https://www.numerama.com/feed/",                                  "Numerama",        "FR"),
-    ("https://www.01net.com/feed/",                                     "01net",           "FR"),
-    ("https://www.zdnet.fr/feeds/rss/actualites/",                      "ZDNet FR",        "FR"),
-    ("https://www.frandroid.com/feed",                                  "Frandroid",       "FR"),
-    ("https://linuxfr.org/news.atom",                                   "LinuxFR",         "FR"),
+    ("https://korben.info/feed",                                         "Korben",              "FR"),
+    ("https://next.ink/feed/",                                           "Next.ink",            "FR"),
+    ("https://www.numerama.com/feed/",                                   "Numerama",            "FR"),
+    ("https://www.01net.com/feed/",                                      "01net",               "FR"),
+    ("https://www.zdnet.fr/feeds/rss/actualites/",                       "ZDNet FR",            "FR"),
+    ("https://www.frandroid.com/feed",                                   "Frandroid",           "FR"),
+    ("https://www.silicon.fr/feed",                                      "Silicon.fr",          "FR"),
+    ("https://www.journaldugeek.com/feed/",                              "Journal du Geek",     "FR"),
+    ("https://www.lebigdata.fr/feed",                                    "LeBigData.fr",        "FR"),
+    ("https://www.actuia.com/feed/",                                     "ActuIA",              "FR"),
+    ("https://linuxfr.org/news.atom",                                    "LinuxFR",             "FR"),
+    ("https://www.undernews.fr/feed",                                    "UnderNews",           "FR"),
+    ("https://www.zataz.com/feed/",                                      "ZATAZ",               "FR"),
+    ("https://www.developpez.com/index/rss",                             "Developpez.com",      "FR"),
     # ── Tech & IT EN ─────────────────────────────────────────────────────
-    ("https://arstechnica.com/feed/",                                   "Ars Technica",    "US"),
-    ("https://www.theverge.com/rss/index.xml",                          "The Verge",       "US"),
-    ("https://www.phoronix.com/rss.php",                                "Phoronix",        "US"),
-    ("https://theregister.com/headlines.atom",                          "The Register",    "UK"),
-    ("https://slashdot.org/rss/slashdot.rss",                           "Slashdot",        "US"),
-    ("https://hackaday.com/blog/feed/",                                 "Hackaday",        "US"),
-    ("https://rss.nytimes.com/services/xml/rss/nyt/Technology.xml",     "NYT Tech",        "US"),
-    # ── Science ──────────────────────────────────────────────────────────
-    ("https://www.sciencesetavenir.fr/rss.xml",                         "Sciences et Avenir", "FR"),
-    ("https://www.newscientist.com/feed/home/",                         "New Scientist",   "UK"),
-    # ── Europe & Politique ───────────────────────────────────────────────
-    ("https://politico.eu/feed/",                                       "Politico EU",     "EU"),
-    # ── BD & Littérature ─────────────────────────────────────────────────
-    ("https://actuabd.com/feed/",                                       "ActuaBD",         "FR"),
+    ("https://arstechnica.com/feed/",                                    "Ars Technica",        "US"),
+    ("https://www.theverge.com/rss/index.xml",                           "The Verge",           "US"),
+    ("https://www.phoronix.com/rss.php",                                 "Phoronix",            "US"),
+    ("https://theregister.com/headlines.atom",                           "The Register",        "UK"),
+    ("https://slashdot.org/rss/slashdot.rss",                            "Slashdot",            "US"),
+    ("https://hackaday.com/blog/feed/",                                  "Hackaday",            "US"),
+    ("https://www.techradar.com/feeds.xml",                              "TechRadar",           "UK"),
+    ("https://feeds.macrumors.com/MacRumors-Front",                      "MacRumors",           "US"),
+    ("https://www.technologyreview.com/feed/",                           "MIT Tech Review",     "US"),
+    ("https://feed.infoq.com/",                                          "InfoQ",               "US"),
+    ("https://spectrum.ieee.org/rss/fulltext",                           "IEEE Spectrum",       "US"),
+    ("https://www.9to5google.com/feed/",                                 "9to5Google",          "US"),
+    ("https://news.ycombinator.com/rss",                                 "Hacker News",         "US"),
+    # ── Cybersécurité ────────────────────────────────────────────────────
+    ("https://krebsonsecurity.com/feed/",                                "Krebs on Security",   "US"),
+    ("https://www.schneier.com/feed/atom/",                              "Schneier on Security","US"),
+    # ── Science & Environnement ──────────────────────────────────────────
+    ("https://www.sciencesetavenir.fr/rss.xml",                          "Sciences et Avenir",  "FR"),
+    ("https://trustmyscience.com/feed/",                                 "Trust My Science",    "FR"),
+    ("https://reporterre.net/spip.php?page=backend",                     "Reporterre",          "FR"),
+    ("https://www.actu-environnement.com/rss/",                          "Actu-Environnement",  "FR"),
+    ("https://feeds.bbci.co.uk/news/science_and_environment/rss.xml",   "BBC Science",         "UK"),
+    ("https://www.newscientist.com/feed/home/",                          "New Scientist",       "UK"),
+    ("https://www.sciencedaily.com/rss/all.xml",                         "ScienceDaily",        "US"),
+    ("https://phys.org/rss-feed/",                                       "Phys.org",            "INTL"),
+    ("https://export.arxiv.org/rss/cs.AI",                               "arXiv IA",            "INTL"),
+    # ── Économie ─────────────────────────────────────────────────────────
+    ("https://www.bruegel.org/rss.xml",                                  "Bruegel",             "EU"),
+    # ── BD & Comics ──────────────────────────────────────────────────────
+    ("https://actuabd.com/feed/",                                        "ActuaBD",             "FR"),
+    ("https://www.cbr.com/feed/",                                        "CBR Comics",          "US"),
 ]
 
 REGIONS = ["us", "uk", "de", "fr", "es", "at", "ch", "nl"]
@@ -144,7 +186,10 @@ def _fetch_rss(url: str, publisher: str, country: str) -> list[RawArticle]:
         "dc":      "http://purl.org/dc/elements/1.1/",
     }
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "agent-news/1.0"})
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/115.0",
+            "Accept": "application/rss+xml, application/atom+xml, application/xml, text/xml, */*",
+        })
         with urllib.request.urlopen(req, timeout=15) as resp:
             raw_xml = resp.read()
     except Exception as e:
