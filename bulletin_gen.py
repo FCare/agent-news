@@ -10,6 +10,8 @@ from search_client import SearchClient
 
 logger = logging.getLogger(__name__)
 
+_LLM_SEMAPHORE = asyncio.Semaphore(2)
+
 CATEGORIES = [
     "International",
     "Europe",
@@ -225,13 +227,14 @@ def _llm_call(llm_client: openai.OpenAI, model: str, system: str,
 async def _llm(llm_client: openai.OpenAI, model: str, system: str,
                user: str, tool: list, max_tokens: int | None = None) -> dict:
     loop = asyncio.get_event_loop()
-    try:
-        return await loop.run_in_executor(
-            None, _llm_call, llm_client, model, system, user, tool, max_tokens
-        )
-    except Exception as e:
-        logger.error(f"LLM call failed: {e}")
-        return {}
+    async with _LLM_SEMAPHORE:
+        try:
+            return await loop.run_in_executor(
+                None, _llm_call, llm_client, model, system, user, tool, max_tokens
+            )
+        except Exception as e:
+            logger.error(f"LLM call failed: {e}")
+            return {}
 
 
 # ---------------------------------------------------------------------------
