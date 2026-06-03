@@ -149,7 +149,7 @@ def _format_bulletin(bulletin_row: dict) -> str:
     return "\n".join(parts)
 
 
-def _format_category(bulletin_row: dict, category: str) -> str:
+def _format_category(bulletin_row: dict, category: str) -> str | None:
     b = bulletin_row["bulletin_json"]
     date = bulletin_row["date"]
     categories = b.get("categories", {})
@@ -161,8 +161,7 @@ def _format_category(bulletin_row: dict, category: str) -> str:
             matched = cat
             break
     if not matched:
-        avail = ", ".join(categories.keys())
-        return f"Catégorie '{category}' introuvable. Disponibles: {avail}"
+        return None
 
     stories = categories[matched]
     parts = [f"[{date}] {matched.upper()}", ""]
@@ -189,8 +188,8 @@ def _format_deep_dive(bulletin_row: dict, topic_query: str) -> str:
                 best_score = score
                 best = story
 
-    if not best:
-        return "Sujet introuvable dans le bulletin."
+    if not best or best_score == 0:
+        return None
 
     date_range = best.get("date_range", "")
     parts = [
@@ -329,7 +328,14 @@ async def on_user_connected(topic: str, payload) -> None:
             if not category:
                 content = f"Précise une catégorie. Disponibles: {', '.join(bulletin_gen.CATEGORIES)}"
             elif bulletin_row:
-                content = _format_category(bulletin_row, category) + status_note
+                result = _format_category(bulletin_row, category)
+                if result is not None:
+                    content = result
+                else:
+                    llm = _get_llm_client()
+                    content = await bulletin_gen.answer_question(
+                        category, bulletin_row["bulletin_json"], _search_client, llm, LLM_MODEL
+                    )
             else:
                 content = "Bulletin non disponible."
 
@@ -338,7 +344,14 @@ async def on_user_connected(topic: str, payload) -> None:
             if not topic_query:
                 content = "Précise un sujet avec le champ 'topic'."
             elif bulletin_row:
-                content = _format_deep_dive(bulletin_row, topic_query) + status_note
+                result = _format_deep_dive(bulletin_row, topic_query)
+                if result is not None:
+                    content = result
+                else:
+                    llm = _get_llm_client()
+                    content = await bulletin_gen.answer_question(
+                        topic_query, bulletin_row["bulletin_json"], _search_client, llm, LLM_MODEL
+                    )
             else:
                 content = "Bulletin non disponible."
 
