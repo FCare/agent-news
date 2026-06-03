@@ -307,37 +307,31 @@ async def _cluster_topics(articles: list[RawArticle],
     result = await _llm(
         llm_client, model,
         system=(
-            "Tu es éditeur d'un journal télévisé. Identifie EXACTEMENT 15 sujets d'actualité "
-            "distincts parmi les titres fournis. Pas plus, pas moins. "
+            "Tu es éditeur d'un journal télévisé de référence. Identifie tous les sujets "
+            "d'actualité distincts parmi les titres fournis (entre 20 et 40 sujets selon la richesse). "
             "Regroupe les articles couvrant le même événement. Classe par importance décroissante. "
             f"Catégories: {', '.join(CATEGORIES)}. "
             "Les sujets tech/IA → 'Informatique & IA'. "
-            "keywords: 3 mots courts max. Appelle identify_topics."
+            "keywords: 3 mots courts en français. Appelle identify_topics."
         ),
         user=f"Articles ({len(sample)} titres):\n\n{articles_text}",
         tool=_CLUSTER_TOOL,
-        max_tokens=2000,
     )
-    MAX_TOPICS = 25
     topics = result.get("topics", [])
     topics.sort(key=lambda t: -t.get("importance", 0))
 
-    # Deduplicate by title (LLM sometimes generates the same generic topic multiple times)
-    seen_titles: set[str] = set()
-    unique_topics = []
+    # Deduplicate by title
+    seen: set[str] = set()
+    unique = []
     for t in topics:
         key = t["title"].lower().strip()
-        if key not in seen_titles:
-            seen_titles.add(key)
-            unique_topics.append(t)
-    n_dupes = len(topics) - len(unique_topics)
-    topics = unique_topics
+        if key not in seen:
+            seen.add(key)
+            unique.append(t)
+    n_dupes = len(topics) - len(unique)
+    topics = unique
 
-    if len(topics) > MAX_TOPICS:
-        logger.info(f"Clustering: {len(topics)} sujets ({n_dupes} doublons supprimés) → tronqué à {MAX_TOPICS}")
-        topics = topics[:MAX_TOPICS]
-    else:
-        logger.info(f"Clustering: {len(topics)} sujets ({n_dupes} doublons supprimés)")
+    logger.info(f"Clustering: {len(topics)} sujets ({n_dupes} doublons supprimés)")
     for t in topics:
         logger.info(f"  [{t.get('importance',0):2d}] [{t['category']}] {t['title']}")
     return topics
