@@ -91,21 +91,26 @@ async def run_bulletin_pipeline() -> None:
             logger.error("[2/4] Bulletin vide, pipeline annulé")
             return
 
-        # 4. Save (SQLite + ChromaDB)
+        # 4. Save (SQLite + ChromaDB) — only if bulletin is valid
         logger.info("[3/4] Sauvegarde du bulletin...")
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         n_topics = sum(len(v) for v in bulletin.get("categories", {}).values())
-        await storage.save_bulletin(
-            date=today,
-            flash=bulletin["flash"],
-            headline=bulletin["headline"],
-            bulletin_json=bulletin,
-            n_articles=len(articles),
-            n_topics=n_topics,
-        )
-        await loop.run_in_executor(
-            None, vector_store.upsert_bulletin_topics, bulletin, today
-        )
+        has_flash = bool(bulletin.get("flash", "").strip())
+        has_headline = bulletin.get("headline", "") not in ("", "L'actualité du jour")
+        if not has_flash or not has_headline:
+            logger.warning("[3/4] Bulletin incomplet (flash ou headline manquant) — sauvegarde ignorée pour ne pas écraser un bulletin valide")
+        else:
+            await storage.save_bulletin(
+                date=today,
+                flash=bulletin["flash"],
+                headline=bulletin["headline"],
+                bulletin_json=bulletin,
+                n_articles=len(articles),
+                n_topics=n_topics,
+            )
+            await loop.run_in_executor(
+                None, vector_store.upsert_bulletin_topics, bulletin, today
+            )
 
         # 5. Purge old data
         logger.info("[4/4] Purge des données anciennes...")
