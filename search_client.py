@@ -83,7 +83,9 @@ class SearchClient:
                           categories: str = "news") -> list[dict]:
         results = []
         for i, q in enumerate(queries):
-            logger.debug(f"  Recherche {i+1}/{len(queries)}: {q[:60]!r}")
+            logger.info(f"    recherche [{i+1}/{len(queries)}] → {q[:70]!r}")
             r = await self.search(q, categories)
+            report_len = len(r.get("report") or "")
+            logger.info(f"    recherche [{i+1}/{len(queries)}] ← {report_len} chars")
             results.append(r)
         return results
