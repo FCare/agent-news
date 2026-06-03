@@ -65,11 +65,6 @@ RSS_FEEDS = [
     ("https://www.lefigaro.fr/rss/figaro_actualites.xml",                "Le Figaro",           "FR"),
     ("https://www.liberation.fr/arc/outboundfeeds/rss/",                 "Libération",          "FR"),
     ("https://www.francetvinfo.fr/titres.rss",                           "France TV Info",      "FR"),
-    ("https://www.franceinfo.fr/rss/rss-france.xml",                     "Franceinfo France",   "FR"),
-    ("https://www.franceinfo.fr/rss/rss-monde.xml",                      "Franceinfo Monde",    "FR"),
-    ("https://www.franceinfo.fr/rss/rss-economie.xml",                   "Franceinfo Éco",      "FR"),
-    ("https://www.franceinfo.fr/rss/rss-sciences.xml",                   "Franceinfo Sciences", "FR"),
-    ("https://www.franceinfo.fr/rss/rss-technologie.xml",                "Franceinfo Tech",     "FR"),
     ("https://www.nouvelobs.com/rss",                                    "Le Nouvel Obs",       "FR"),
     ("https://www.europe1.fr/rss.xml",                                   "Europe 1",            "FR"),
     ("https://www.bfmtv.com/rss/info/flux-rss/flux-toutes-les-actualites/", "BFM TV",          "FR"),
@@ -202,8 +197,10 @@ def _el_text(item: ET.Element, *tags: str) -> str:
 
 
 def _fix_xml(raw: bytes) -> bytes:
-    """Best-effort fix for common XML issues (bare &, encoding declaration)."""
-    # Fix bare & not part of an entity
+    """Best-effort fix for common XML issues."""
+    # Remove XML-illegal control characters (keep tab/LF/CR)
+    raw = re.sub(rb'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', b'', raw)
+    # Fix bare & not part of a named/numeric entity
     raw = re.sub(rb'&(?!(?:amp|lt|gt|apos|quot|#x?[0-9a-fA-F]+);)', b'&amp;', raw)
     return raw
 

@@ -185,13 +185,14 @@ def cluster_articles(articles: list[RawArticle],
         cluster_articles = [articles[i] for i in indices]
 
         # Representative title: article closest to cluster centroid
-        centroid = X[indices].mean(axis=0)
+        # .mean() on sparse returns np.matrix — convert to array for sklearn
+        centroid = np.asarray(X[indices].mean(axis=0))
         sims_to_centroid = cosine_similarity(centroid, X[indices])[0]
         rep_idx = indices[int(np.argmax(sims_to_centroid))]
         title = articles[rep_idx].title
 
         # Top keywords for category assignment
-        cluster_tfidf = X[indices].mean(axis=0).A[0]
+        cluster_tfidf = np.asarray(X[indices].mean(axis=0)).ravel()
         top_kw_idx = cluster_tfidf.argsort()[-8:][::-1]
         keywords = [feature_names[i] for i in top_kw_idx if cluster_tfidf[i] > 0]
 
