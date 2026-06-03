@@ -199,29 +199,74 @@ _ANSWER_TOOL = [{
 # LLM helpers
 # ---------------------------------------------------------------------------
 
+def _recover_partial_json(raw: str) -> dict:
+    """Try to extract complete objects from truncated tool-call JSON."""
+    # Find last complete object before truncation
+    last = raw.rfind("},")
+    if last == -1:
+        last = raw.rfind("}")
+    if last == -1:
+        return {}
+    fragment = raw[:last + 1]
+    # Locate the opening of the topics array
+    topics_pos = fragment.find('"topics"')
+    if topics_pos == -1:
+        return {}
+    array_start = fragment.find("[", topics_pos)
+    if array_start == -1:
+        return {}
+    try:
+        return json.loads(fragment[: last + 1] + "]}")
+    except Exception:
+        return {}
+
+
 def _llm_call(llm_client: openai.OpenAI, model: str, system: str,
-              user: str, tool: list) -> dict:
-    resp = llm_client.chat.completions.create(
+              user: str, tool: list, max_tokens: int | None = None) -> dict:
+    kwargs: dict = dict(
         model=model,
         messages=[
             {"role": "system", "content": system},
-            {"role": "user", "content": user},
+            {"role": "user",   "content": user},
         ],
         tools=tool,
         tool_choice="required",
     )
+    if max_tokens:
+        kwargs["max_tokens"] = max_tokens
+
+    resp = llm_client.chat.completions.create(**kwargs)
     calls = resp.choices[0].message.tool_calls
     if not calls:
         return {}
-    return json.loads(calls[0].function.arguments)
+
+    raw = calls[0].function.arguments
+    finish = resp.choices[0].finish_reason
+    if finish == "length":
+        logger.warning(f"LLM output truncated (finish=length), attempting JSON recovery "
+                       f"({len(raw)} chars)")
+        logger.debug(f"  raw[:500]: {raw[:500]}")
+        logger.debug(f"  raw[-200]: {raw[-200:]}")
+
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        logger.error(f"LLM JSON parse error: {e} — raw length={len(raw)}")
+        logger.warning(f"  first 300 chars: {raw[:300]}")
+        logger.warning(f"  last  200 chars: {raw[-200:]}")
+        recovered = _recover_partial_json(raw)
+        if recovered:
+            n = len(recovered.get("topics", []))
+            logger.warning(f"  JSON recovery: {n} sujets récupérés")
+        return recovered
 
 
 async def _llm(llm_client: openai.OpenAI, model: str, system: str,
-               user: str, tool: list) -> dict:
+               user: str, tool: list, max_tokens: int | None = None) -> dict:
     loop = asyncio.get_event_loop()
     try:
         return await loop.run_in_executor(
-            None, _llm_call, llm_client, model, system, user, tool
+            None, _llm_call, llm_client, model, system, user, tool, max_tokens
         )
     except Exception as e:
         logger.error(f"LLM call failed: {e}")
@@ -262,15 +307,16 @@ async def _cluster_topics(articles: list[RawArticle],
     result = await _llm(
         llm_client, model,
         system=(
-            "Tu es éditeur d'un journal télévisé de référence. Tu reçois des titres d'articles "
-            "de presse européens et américains. Identifie les sujets d'actualité distincts, "
-            "regroupe les articles qui couvrent le même événement, et classe par importance. "
-            f"Catégories disponibles: {', '.join(CATEGORIES)}. "
-            "Les sujets tech/IA vont dans 'Informatique & IA'. "
-            "Vise 15-25 sujets distincts. Réponds en appelant identify_topics."
+            "Tu es éditeur d'un journal télévisé. Identifie EXACTEMENT 15 sujets d'actualité "
+            "distincts parmi les titres fournis. Pas plus, pas moins. "
+            "Regroupe les articles couvrant le même événement. Classe par importance décroissante. "
+            f"Catégories: {', '.join(CATEGORIES)}. "
+            "Les sujets tech/IA → 'Informatique & IA'. "
+            "keywords: 3 mots courts max. Appelle identify_topics."
         ),
-        user=f"Articles de presse ({len(sample)} titres):\n\n{articles_text}",
+        user=f"Articles ({len(sample)} titres):\n\n{articles_text}",
         tool=_CLUSTER_TOOL,
+        max_tokens=2000,
     )
     MAX_TOPICS = 25
     topics = result.get("topics", [])
