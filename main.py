@@ -33,7 +33,7 @@ SERVICE_API_KEY     = os.environ["MQTT_SERVICE_API_KEY"]
 LLM_BASE_URL        = os.environ.get("LLM_BASE_URL", "https://thebrain.caronboulme.fr/v1")
 LLM_MODEL           = os.environ.get("LLM_MODEL", "qwen3-vl-8b-instruct")
 LLAMACPP_API_KEY    = os.environ["LLAMACPP_API_KEY"]
-CRAWL_INTERVAL_H    = int(os.environ.get("CRAWL_INTERVAL_H", "3"))
+BULLETIN_HOURS      = os.environ.get("BULLETIN_HOURS", "8,20")
 
 AGENT_NAME = "news"
 _subscribed_users: set[str] = set()
@@ -382,14 +382,16 @@ async def main() -> None:
 
     nexus.subscribe("common/user_connected", on_user_connected)
     nexus.start_listening()
-    logger.info(f"News service démarré — LLM: {LLM_MODEL} — cycle toutes les {CRAWL_INTERVAL_H}h")
+    hours = BULLETIN_HOURS
+    logger.info(f"News service démarré — LLM: {LLM_MODEL} — bulletins à {hours}h")
 
-    # Scheduler
-    scheduler = AsyncIOScheduler()
+    # Scheduler: cron aux heures configurées (ex: "8,20" → 8h et 20h)
+    scheduler = AsyncIOScheduler(timezone="Europe/Paris")
     scheduler.add_job(
         run_bulletin_pipeline,
-        "interval",
-        hours=CRAWL_INTERVAL_H,
+        "cron",
+        hour=hours,
+        minute=0,
         id="bulletin_pipeline",
         max_instances=1,
     )
