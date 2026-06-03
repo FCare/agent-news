@@ -448,56 +448,79 @@ async def generate_bulletin(articles: list[RawArticle], search_client: SearchCli
 
 
 # ---------------------------------------------------------------------------
-# Question answering
+# Question answering (ChromaDB semantic search)
 # ---------------------------------------------------------------------------
 
 async def answer_question(query: str, bulletin: dict, search_client: SearchClient,
                            llm_client: openai.OpenAI, model: str) -> str:
-    # Flatten all topics from bulletin
-    all_topics = []
-    for stories in bulletin.get("categories", {}).values():
-        all_topics.extend(stories)
+    import vector_store
 
-    if not all_topics:
-        return "Aucun bulletin disponible pour répondre à cette question."
+    loop = asyncio.get_event_loop()
 
-    topics_summary = "\n".join(
-        f"[{t['category']}] {t['title']}: {t.get('summary', '')[:300]}"
-        for t in all_topics
+    # 1. Semantic search in bulletin topics (deep dives)
+    topic_hits = await loop.run_in_executor(
+        None, vector_store.search_topics, query, 6
+    )
+    # 2. Semantic search in raw articles
+    article_hits = await loop.run_in_executor(
+        None, vector_store.search_articles, query, 6
     )
 
-    # Find relevant topics + decide if web search needed
+    logger.info(
+        f"ChromaDB '{query[:50]}': {len(topic_hits)} topics, {len(article_hits)} articles"
+    )
+
+    # Build context from semantic hits
+    context_parts = []
+    for h in topic_hits:
+        meta = h["metadata"]
+        context_parts.append(
+            f"[{meta.get('category','')} — {meta.get('date','')} — score {h['score']}]\n"
+            f"{h['content'][:600]}"
+        )
+    for h in article_hits:
+        meta = h["metadata"]
+        context_parts.append(
+            f"[{meta.get('publisher','')} — score {h['score']}]\n"
+            f"{h['content'][:400]}"
+        )
+
+    has_context = bool(context_parts)
+    context_block = "\n\n---\n\n".join(context_parts) if context_parts else ""
+
+    # 3. LLM answer from semantic context
     result = await _llm(
         llm_client, model,
         system=(
-            "Tu es un expert en actualités. Tu as accès au bulletin du jour. "
-            "Réponds à la question posée en utilisant les informations disponibles. "
-            "Si le sujet n'est pas couvert dans le bulletin, indique needs_web_search=true. "
+            "Tu es un expert en actualités. Réponds à la question en français, ton oral, factuel. "
+            "Base-toi uniquement sur le contexte fourni. "
+            "Si le contexte ne couvre pas le sujet, indique needs_web_search=true. "
             "Appelle answer_question."
         ),
         user=(
             f"Question: {query}\n\n"
-            f"Bulletin du jour:\n{topics_summary}"
+            f"Contexte (résultats sémantiques):\n{context_block or '(aucun résultat)'}"
         ),
         tool=_ANSWER_TOOL,
     )
 
     answer = result.get("answer", "")
-    needs_search = result.get("needs_web_search", False)
+    needs_search = result.get("needs_web_search", False) or not has_context
 
+    # 4. Web search fallback si pas de contexte ou LLM non satisfait
     if needs_search or not answer:
         logger.info(f"Question '{query[:50]}' → recherche web complémentaire")
         search_results = await search_client.search_many(
-            [query, f"{query} actualité récente", f"{query} news"], "news"
+            [query, f"{query} actualité récente"], "news"
         )
         reports = [r.get("report", "") for r in search_results if r.get("report")]
         if reports:
-            search_block = "\n\n".join(r[:600] for r in reports[:5])
+            search_block = "\n\n".join(r[:800] for r in reports[:4])
             result2 = await _llm(
                 llm_client, model,
                 system=(
-                    "Tu es expert en actualités. Réponds à la question en français "
-                    "à partir des résultats de recherche fournis. Ton oral, factuel. "
+                    "Tu es expert en actualités. Réponds à la question en français, "
+                    "ton oral, factuel, à partir des résultats de recherche. "
                     "Appelle answer_question avec needs_web_search=false."
                 ),
                 user=f"Question: {query}\n\nRecherches:\n{search_block}",

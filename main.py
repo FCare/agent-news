@@ -11,6 +11,7 @@ from nexus_client import NexusClient
 
 import bulletin_gen
 import storage
+import vector_store
 from crawler import crawl_articles
 from search_client import SearchClient
 
@@ -69,7 +70,7 @@ async def run_bulletin_pipeline() -> None:
             return
         logger.info(f"[1/4] Crawl terminé: {len(articles)} articles")
 
-        # 2. Save articles
+        # 2. Save articles (SQLite + ChromaDB)
         rows = [
             {
                 "url": a.url, "title": a.title, "body": a.body,
@@ -79,6 +80,8 @@ async def run_bulletin_pipeline() -> None:
             for a in articles
         ]
         await storage.save_articles(rows)
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, vector_store.upsert_articles, rows)
 
         # 3. Generate bulletin
         logger.info("[2/4] Clustering et identification des sujets...")
@@ -88,7 +91,7 @@ async def run_bulletin_pipeline() -> None:
             logger.error("[2/4] Bulletin vide, pipeline annulé")
             return
 
-        # 4. Save
+        # 4. Save (SQLite + ChromaDB)
         logger.info("[3/4] Sauvegarde du bulletin...")
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         n_topics = sum(len(v) for v in bulletin.get("categories", {}).values())
@@ -99,6 +102,9 @@ async def run_bulletin_pipeline() -> None:
             bulletin_json=bulletin,
             n_articles=len(articles),
             n_topics=n_topics,
+        )
+        await loop.run_in_executor(
+            None, vector_store.upsert_bulletin_topics, bulletin, today
         )
 
         # 5. Purge old data

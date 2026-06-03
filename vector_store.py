@@ -1,0 +1,177 @@
+"""
+ChromaDB vector store for semantic search over articles and bulletin topics.
+
+Two collections:
+- articles       : crawled article bodies (TTL = crawler TTL)
+- bulletin_topics: deep dives from generated bulletins (kept 3 months)
+"""
+
+import hashlib
+import logging
+from datetime import datetime, timezone
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+CHROMA_PATH = Path("/data/chroma")
+# Multilingual model — good for FR/EN mixed news content (~470 MB, cached after first run)
+EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
+
+_client = None
+_articles_col = None
+_topics_col = None
+
+
+def _get_client():
+    global _client
+    if _client is None:
+        import chromadb
+        CHROMA_PATH.mkdir(parents=True, exist_ok=True)
+        _client = chromadb.PersistentClient(path=str(CHROMA_PATH))
+    return _client
+
+
+def _get_ef():
+    from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+    return SentenceTransformerEmbeddingFunction(model_name=EMBEDDING_MODEL)
+
+
+def _articles_collection():
+    global _articles_col
+    if _articles_col is None:
+        _articles_col = _get_client().get_or_create_collection(
+            name="articles",
+            embedding_function=_get_ef(),
+            metadata={"hnsw:space": "cosine"},
+        )
+    return _articles_col
+
+
+def _topics_collection():
+    global _topics_col
+    if _topics_col is None:
+        _topics_col = _get_client().get_or_create_collection(
+            name="bulletin_topics",
+            embedding_function=_get_ef(),
+            metadata={"hnsw:space": "cosine"},
+        )
+    return _topics_col
+
+
+def _article_id(url: str) -> str:
+    return hashlib.md5(url.encode()).hexdigest()
+
+
+def _topic_id(date: str, title: str) -> str:
+    return hashlib.md5(f"{date}:{title}".encode()).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Upsert
+# ---------------------------------------------------------------------------
+
+def upsert_articles(articles: list[dict]) -> None:
+    """Store/update articles in the vector store. Called after each crawl."""
+    if not articles:
+        return
+    try:
+        col = _articles_collection()
+        ids, docs, metas = [], [], []
+        for a in articles:
+            doc = f"{a['title']}\n{(a.get('body') or '')[:800]}"
+            ids.append(_article_id(a["url"]))
+            docs.append(doc)
+            metas.append({
+                "url":       a["url"],
+                "title":     a["title"],
+                "publisher": a.get("publisher", ""),
+                "country":   a.get("country", ""),
+                "crawled_at": a.get("crawled_at", datetime.now(timezone.utc).isoformat()),
+            })
+        # Batch upsert (ChromaDB handles duplicates)
+        BATCH = 100
+        for i in range(0, len(ids), BATCH):
+            col.upsert(
+                ids=ids[i:i+BATCH],
+                documents=docs[i:i+BATCH],
+                metadatas=metas[i:i+BATCH],
+            )
+        logger.info(f"ChromaDB: {len(ids)} articles upsertés")
+    except Exception as e:
+        logger.error(f"ChromaDB upsert articles failed: {e}")
+
+
+def upsert_bulletin_topics(bulletin_json: dict, date: str) -> None:
+    """Store deep dives from a bulletin. Called after each bulletin generation."""
+    try:
+        col = _topics_collection()
+        ids, docs, metas = [], [], []
+        for stories in bulletin_json.get("categories", {}).values():
+            for s in stories:
+                title = s.get("title", "")
+                doc = f"{title}\n{s.get('summary', '')}\n{s.get('deep_dive', '')}"
+                ids.append(_topic_id(date, title))
+                docs.append(doc[:2000])
+                metas.append({
+                    "title":        title,
+                    "category":     s.get("category", ""),
+                    "date":         date,
+                    "what_to_watch": s.get("what_to_watch", ""),
+                    "sources":      ", ".join(s.get("sources", [])),
+                })
+        if ids:
+            col.upsert(ids=ids, documents=docs, metadatas=metas)
+            logger.info(f"ChromaDB: {len(ids)} topics upsertés (bulletin {date})")
+    except Exception as e:
+        logger.error(f"ChromaDB upsert topics failed: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Search
+# ---------------------------------------------------------------------------
+
+def search_topics(query: str, n_results: int = 8,
+                  date_filter: str | None = None) -> list[dict]:
+    """Semantic search in bulletin deep dives."""
+    try:
+        col = _topics_collection()
+        where = {"date": {"$gte": date_filter}} if date_filter else None
+        kwargs = dict(query_texts=[query], n_results=min(n_results, col.count()))
+        if where:
+            kwargs["where"] = where
+        results = col.query(**kwargs)
+        return _format_results(results)
+    except Exception as e:
+        logger.error(f"ChromaDB search topics failed: {e}")
+        return []
+
+
+def search_articles(query: str, n_results: int = 8) -> list[dict]:
+    """Semantic search in raw articles."""
+    try:
+        col = _articles_collection()
+        count = col.count()
+        if count == 0:
+            return []
+        results = col.query(
+            query_texts=[query],
+            n_results=min(n_results, count),
+        )
+        return _format_results(results)
+    except Exception as e:
+        logger.error(f"ChromaDB search articles failed: {e}")
+        return []
+
+
+def _format_results(results: dict) -> list[dict]:
+    out = []
+    docs = results.get("documents", [[]])[0]
+    metas = results.get("metadatas", [[]])[0]
+    distances = results.get("distances", [[]])[0]
+    for doc, meta, dist in zip(docs, metas, distances):
+        out.append({
+            "content":  doc,
+            "metadata": meta,
+            "score":    round(1 - dist, 3),  # cosine similarity
+        })
+    return out
