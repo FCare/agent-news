@@ -73,15 +73,21 @@ def _get_publisher_info(url: str) -> tuple[str, str]:
     return ("Unknown", "?")
 
 
-def _crawl_sync() -> list[RawArticle]:
-    # Silence fundus debug spam (robots.txt skips, etc.)
-    logging.getLogger("fundus").setLevel(logging.WARNING)
+def _silence_fundus_loggers() -> None:
+    """Mute fundus sub-loggers after import (they register themselves on import)."""
+    for name in list(logging.Logger.manager.loggerDict.keys()):
+        if name.startswith("fundus"):
+            logging.getLogger(name).setLevel(logging.ERROR)
 
+
+def _crawl_sync() -> list[RawArticle]:
     try:
         from fundus import Crawler, PublisherCollection
     except ImportError:
         logger.error("fundus non installé")
         return []
+
+    _silence_fundus_loggers()
 
     collections = []
     for region in REGIONS:
