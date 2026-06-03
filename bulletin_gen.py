@@ -11,7 +11,7 @@ from search_client import SearchClient
 
 logger = logging.getLogger(__name__)
 
-_LLM_SEMAPHORE = asyncio.Semaphore(2)
+_LLM_SEMAPHORE = asyncio.Semaphore(1)
 
 CATEGORIES = [
     "International",
