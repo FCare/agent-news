@@ -310,10 +310,7 @@ async def on_user_connected(topic: str, payload) -> None:
 
         bulletin_row = await storage.get_latest_bulletin()
 
-        if _is_generating:
-            status_note = "\n\n(Mise à jour du bulletin en cours...)"
-        else:
-            status_note = ""
+        status_note = ""
 
         content = ""
 
