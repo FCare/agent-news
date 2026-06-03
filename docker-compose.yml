@@ -11,6 +11,7 @@ services:
       - ansible
     volumes:
       - news-data:/data
+      - hf-cache:/root/.cache/huggingface
     restart: unless-stopped
     logging:
       driver: json-file
@@ -20,3 +21,4 @@ services:
 
 volumes:
   news-data:
+  hf-cache:
