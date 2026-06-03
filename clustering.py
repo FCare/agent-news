@@ -62,9 +62,10 @@ _CATEGORY_KEYWORDS: list[tuple[str, list[str]]] = [
         "bitcoin", "crypto", "ethereum", "finance",
     ]),
     ("France", [
-        "france", "paris", "macron", "assemblée nationale", "sénat", "élysée",
-        "gouvernement", "ministre", "premier ministre", "loi", "réforme",
-        "grève", "manifestation", "police", "gendarmerie",
+        "france", "paris", "assemblée nationale", "sénat", "élysée",
+        "gouvernement", "ministre", "premier ministre", "président", "présidente",
+        "loi", "réforme", "grève", "manifestation", "police", "gendarmerie",
+        "célébrité", "people", "personnalité", "médias français",
     ]),
     ("Europe", [
         "europe", "european", "ue", "union européenne", "bruxelles", "brussels",
