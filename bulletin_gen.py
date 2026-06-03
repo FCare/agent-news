@@ -252,9 +252,14 @@ async def _cluster_topics(articles: list[RawArticle],
         user=f"Articles de presse ({len(sample)} titres):\n\n{articles_text}",
         tool=_CLUSTER_TOOL,
     )
+    MAX_TOPICS = 25
     topics = result.get("topics", [])
     topics.sort(key=lambda t: -t.get("importance", 0))
-    logger.info(f"Clustering: {len(topics)} sujets identifiés")
+    if len(topics) > MAX_TOPICS:
+        logger.info(f"Clustering: {len(topics)} sujets → tronqué à {MAX_TOPICS} (top importance)")
+        topics = topics[:MAX_TOPICS]
+    else:
+        logger.info(f"Clustering: {len(topics)} sujets identifiés")
     return topics
 
 
