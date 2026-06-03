@@ -110,6 +110,7 @@ async def run_bulletin_pipeline() -> None:
         # 5. Purge old data
         logger.info("[4/4] Purge des données anciennes...")
         await storage.purge_old_data()
+        await loop.run_in_executor(None, vector_store.purge_old_topics)
 
         logger.info(f"=== Pipeline terminé: {n_topics} sujets pour le {today} ===")
 

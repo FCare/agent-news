@@ -163,6 +163,21 @@ def search_articles(query: str, n_results: int = 8) -> list[dict]:
         return []
 
 
+def purge_old_topics(retention_days: int = 90) -> None:
+    """Delete bulletin topics older than retention_days. Mirrors SQLite bulletin retention."""
+    from datetime import timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).strftime("%Y-%m-%d")
+    try:
+        col = _topics_collection()
+        before = col.count()
+        col.delete(where={"date": {"$lt": cutoff}})
+        deleted = before - col.count()
+        if deleted:
+            logger.info(f"ChromaDB: {deleted} topics supprimés (antérieurs au {cutoff})")
+    except Exception as e:
+        logger.error(f"ChromaDB purge topics failed: {e}")
+
+
 def _format_results(results: dict) -> list[dict]:
     out = []
     docs = results.get("documents", [[]])[0]

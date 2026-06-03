@@ -133,6 +133,24 @@ _FLASH_TOOL = [{
     }
 }]
 
+_TRANSLATE_TOOL = [{
+    "type": "function",
+    "function": {
+        "name": "translate_excerpts",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "translations": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Extraits traduits en français, dans le même ordre que l'entrée",
+                }
+            },
+            "required": ["translations"],
+        }
+    }
+}]
+
 _ANSWER_TOOL = [{
     "type": "function",
     "function": {
@@ -515,7 +533,25 @@ async def answer_question(query: str, bulletin: dict, search_client: SearchClien
         f"ChromaDB '{query[:50]}': {len(topic_hits)} topics, {len(article_hits)} articles"
     )
 
-    # Build context from semantic hits
+    # Translate raw article excerpts to French before building context
+    if article_hits:
+        raw_excerpts = [h["content"][:400] for h in article_hits]
+        result = await _llm(
+            llm_client, model,
+            system=(
+                "Traduis chaque extrait numéroté en français. "
+                "Conserve le même ordre et la même numérotation. "
+                "Appelle translate_excerpts."
+            ),
+            user="\n\n".join(f"[{i+1}] {t}" for i, t in enumerate(raw_excerpts)),
+            tool=_TRANSLATE_TOOL,
+        )
+        translated = result.get("translations", [])
+        if len(translated) == len(article_hits):
+            for i, h in enumerate(article_hits):
+                h["content"] = translated[i]
+
+    # Build context from semantic hits (all in French)
     context_parts = []
     for h in topic_hits:
         meta = h["metadata"]
