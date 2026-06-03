@@ -264,6 +264,8 @@ async def _cluster_topics(articles: list[RawArticle],
         topics = topics[:MAX_TOPICS]
     else:
         logger.info(f"Clustering: {len(topics)} sujets identifiés")
+    for t in topics:
+        logger.info(f"  [{t.get('importance',0):2d}] [{t['category']}] {t['title']}")
     return topics
 
 
@@ -287,7 +289,10 @@ async def _generate_search_queries(topic: dict,
     queries = result.get("queries", [])
     if not queries:
         queries = [topic["title"]]
-    return queries[:SEARCH_QUERIES_PER_TOPIC]
+    queries = queries[:SEARCH_QUERIES_PER_TOPIC]
+    for i, q in enumerate(queries, 1):
+        logger.info(f"    requête {i:2d}: {q}")
+    return queries
 
 
 async def _generate_deep_dive(topic: dict, articles: list[RawArticle],
@@ -334,14 +339,24 @@ async def _generate_deep_dive(topic: dict, articles: list[RawArticle],
         tool=_DEEP_DIVE_TOOL,
     )
 
+    summary   = result.get("summary",       topic["key_facts"])
+    deep_dive = result.get("deep_dive",     "")
+    watch     = result.get("what_to_watch", "")
+    sources   = result.get("sources",       [])
+    logger.info(f"  résumé   : {summary}")
+    logger.info(f"  analyse  : {deep_dive[:200]}{'…' if len(deep_dive) > 200 else ''}")
+    if watch:
+        logger.info(f"  à suivre : {watch}")
+    if sources:
+        logger.info(f"  sources  : {', '.join(sources)}")
     return {
-        "title": topic["title"],
-        "category": topic["category"],
-        "importance": topic.get("importance", 5),
-        "summary": result.get("summary", topic["key_facts"]),
-        "deep_dive": result.get("deep_dive", ""),
-        "what_to_watch": result.get("what_to_watch", ""),
-        "sources": result.get("sources", []),
+        "title":       topic["title"],
+        "category":    topic["category"],
+        "importance":  topic.get("importance", 5),
+        "summary":     summary,
+        "deep_dive":   deep_dive,
+        "what_to_watch": watch,
+        "sources":     sources,
     }
 
 
@@ -363,7 +378,9 @@ async def _generate_flash(topics: list[dict],
         tool=_FLASH_TOOL,
     )
     headline = result.get("headline", "L'actualité du jour")
-    flash = result.get("flash", "")
+    flash    = result.get("flash",    "")
+    logger.info(f"[TITRE]  {headline}")
+    logger.info(f"[FLASH]  {flash}")
     return headline, flash
 
 
