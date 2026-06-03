@@ -1,10 +1,10 @@
 import asyncio
 import json
 import logging
-from typing import Any
 
 import openai
 
+from clustering import cluster_articles
 from crawler import RawArticle
 from search_client import SearchClient
 
@@ -25,8 +25,7 @@ CATEGORIES = [
 # Context budget: 128k tokens available.
 # Worst-case deep dive: 8 articles × 3 000 chars + 10 searches × 2 000 chars
 # ≈ (24 000 + 20 000) / 4 ≈ 11 000 tokens — well within limit.
-MAX_ARTICLES_FOR_CLUSTER = 80        # titles only — beyond this, topics repeat
-MAX_TOPICS = 25                      # cap after clustering — 25 × 5 × 17s ≈ 35 min
+MAX_TOPICS = 25                      # cap after TF-IDF clustering — 25 × 5 × 17s ≈ 35 min
 MAX_BODY_IN_DEEP_DIVE = 3000         # full article body (matches crawler MAX_BODY_CHARS)
 MAX_ARTICLES_IN_DEEP_DIVE = 8        # max articles per topic in deep dive
 MAX_SEARCH_REPORT_IN_DEEP_DIVE = 2000  # richer search context
@@ -36,50 +35,6 @@ SEARCH_QUERIES_PER_TOPIC = 5         # 10 → 5 : corpus RSS déjà riche, web s
 # Tool definitions
 # ---------------------------------------------------------------------------
 
-_CLUSTER_TOOL = [{
-    "type": "function",
-    "function": {
-        "name": "identify_topics",
-        "description": (
-            "Identifie les sujets d'actualité distincts parmi les articles fournis. "
-            "Regroupe les articles couvrant le même événement en un seul sujet. "
-            "Classe par importance décroissante."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "topics": {
-                    "type": "array",
-                    "description": "Liste des sujets identifiés, du plus au moins important",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "title": {
-                                "type": "string",
-                                "description": "Titre court et accrocheur en français"
-                            },
-                            "category": {
-                                "type": "string",
-                                "enum": CATEGORIES,
-                            },
-                            "importance": {
-                                "type": "integer",
-                                "description": "Score 1-10, 10 = sujet majeur du jour"
-                            },
-                            "keywords": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "description": "3-5 mots-clés en français et anglais pour retrouver les articles liés"
-                            },
-                        },
-                        "required": ["title", "category", "importance", "keywords"],
-                    }
-                }
-            },
-            "required": ["topics"],
-        }
-    }
-}]
 
 _SEARCH_QUERIES_TOOL = [{
     "type": "function",
@@ -278,7 +233,15 @@ async def _llm(llm_client: openai.OpenAI, model: str, system: str,
 
 def _find_articles_for_topic(topic: dict, articles: list[RawArticle],
                               n: int = MAX_ARTICLES_IN_DEEP_DIVE) -> list[RawArticle]:
-    """Keyword-based matching: score each article against topic title + keywords."""
+    """
+    Use cluster indices from TF-IDF clustering when available,
+    fall back to keyword matching otherwise.
+    """
+    indices = topic.get("_article_indices")
+    if indices:
+        return [articles[i] for i in indices[:n] if i < len(articles)]
+
+    # Fallback: keyword matching
     keywords = [w.lower() for w in topic.get("keywords", [])]
     title_words = [w.lower() for w in topic["title"].split() if len(w) > 3]
     all_terms = set(keywords + title_words)
@@ -295,48 +258,14 @@ def _find_articles_for_topic(topic: dict, articles: list[RawArticle],
 # Pipeline steps
 # ---------------------------------------------------------------------------
 
-async def _cluster_topics(articles: list[RawArticle],
-                           llm_client: openai.OpenAI, model: str) -> list[dict]:
-    sample = articles[:MAX_ARTICLES_FOR_CLUSTER]
-    articles_text = "\n".join(
-        f"[{i}] [{a.publisher} / {a.country}] {a.title}"
-        for i, a in enumerate(sample)
-    )
-    logger.info(f"  → appel LLM clustering ({len(sample)} titres)...")
-    result = await _llm(
-        llm_client, model,
-        system=(
-            "Tu es éditeur d'un journal télévisé de référence. Identifie tous les sujets "
-            "d'actualité distincts parmi les titres fournis (entre 20 et 40 sujets selon la richesse). "
-            "Regroupe les articles couvrant le même événement. Classe par importance décroissante. "
-            f"Catégories: {', '.join(CATEGORIES)}. "
-            "Les sujets tech/IA → 'Informatique & IA'. "
-            "keywords: 3 mots courts en français. Appelle identify_topics."
-        ),
-        user=f"Articles ({len(sample)} titres):\n\n{articles_text}",
-        tool=_CLUSTER_TOOL,
-    )
-    topics = result.get("topics", [])
-    topics.sort(key=lambda t: -t.get("importance", 0))
-
-    # Deduplicate by title
-    seen: set[str] = set()
-    unique = []
+def _do_cluster_topics(articles: list[RawArticle]) -> list[dict]:
+    """TF-IDF + DBSCAN clustering — no LLM, instant."""
+    topics = cluster_articles(articles)
+    topics = topics[:MAX_TOPICS]
     for t in topics:
-        key = t["title"].lower().strip()
-        if key not in seen:
-            seen.add(key)
-            unique.append(t)
-    n_dupes = len(topics) - len(unique)
-    topics = unique
-
-    if len(topics) > MAX_TOPICS:
-        topics = topics[:MAX_TOPICS]
-        logger.info(f"Clustering: {len(topics)} sujets retenus sur {len(topics)+n_dupes} ({n_dupes} doublons, {len(topics)+n_dupes-len(topics)} écrêtés par importance)")
-    else:
-        logger.info(f"Clustering: {len(topics)} sujets ({n_dupes} doublons supprimés)")
-    for t in topics:
-        logger.info(f"  [{t.get('importance',0):2d}] [{t['category']}] {t['title']}")
+        logger.info(
+            f"  [{t['article_count']:3d} art.] [{t['category']}] {t['title']}"
+        )
     return topics
 
 
@@ -481,8 +410,9 @@ async def generate_bulletin(articles: list[RawArticle], search_client: SearchCli
                              llm_client: openai.OpenAI, model: str) -> dict:
     logger.info(f"Génération bulletin: {len(articles)} articles")
 
-    # Step 1: Cluster into topics
-    topics = await _cluster_topics(articles, llm_client, model)
+    # Step 1: Cluster into topics (TF-IDF + DBSCAN — no LLM, instant)
+    loop = asyncio.get_event_loop()
+    topics = await loop.run_in_executor(None, _do_cluster_topics, articles)
     if not topics:
         logger.error("Aucun sujet identifié")
         return {}
