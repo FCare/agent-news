@@ -69,11 +69,18 @@ _DEEP_DIVE_TOOL = [{
         "parameters": {
             "type": "object",
             "properties": {
+                "title_fr": {
+                    "type": "string",
+                    "description": (
+                        "Titre du sujet en français, court et accrocheur. "
+                        "Traduis si nécessaire depuis l'anglais ou l'allemand."
+                    )
+                },
                 "summary": {
                     "type": "string",
                     "description": (
                         "Résumé factuel en 3-5 phrases, style JT 20h. "
-                        "Faits précis, chiffres si disponibles, ton oral."
+                        "Faits précis, chiffres si disponibles, ton oral. En français."
                     )
                 },
                 "deep_dive": {
@@ -94,7 +101,7 @@ _DEEP_DIVE_TOOL = [{
                     "description": "Noms des médias sources (max 6)"
                 },
             },
-            "required": ["summary", "deep_dive", "what_to_watch", "sources"],
+            "required": ["title_fr", "summary", "deep_dive", "what_to_watch", "sources"],
         }
     }
 }]
@@ -369,10 +376,12 @@ async def _generate_deep_dive(topic: dict, articles: list[RawArticle],
         tool=_DEEP_DIVE_TOOL,
     )
 
+    title_fr  = result.get("title_fr",      topic["title"])
     summary   = result.get("summary",       topic["title"])
     deep_dive = result.get("deep_dive",     "")
     watch     = result.get("what_to_watch", "")
     sources   = result.get("sources",       [])
+    logger.info(f"  titre_fr : {title_fr}")
     logger.info(f"  résumé   : {summary}")
     logger.info(f"  analyse  : {deep_dive[:200]}{'…' if len(deep_dive) > 200 else ''}")
     if watch:
@@ -380,7 +389,7 @@ async def _generate_deep_dive(topic: dict, articles: list[RawArticle],
     if sources:
         logger.info(f"  sources  : {', '.join(sources)}")
     return {
-        "title":        topic["title"],
+        "title":        title_fr,
         "category":     topic["category"],
         "importance":   topic.get("importance", 5),
         "date_range":   date_range,
