@@ -378,9 +378,14 @@ async def main() -> None:
     )
     scheduler.start()
 
-    # Initial run
-    logger.info("Lancement du premier bulletin...")
-    asyncio.create_task(run_bulletin_pipeline())
+    # Initial run — skip if a bulletin already exists for today
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    existing = await storage.get_bulletin_by_date(today)
+    if existing:
+        logger.info(f"Bulletin du {today} déjà présent, pipeline ignoré au démarrage.")
+    else:
+        logger.info("Aucun bulletin pour aujourd'hui, lancement du pipeline...")
+        asyncio.create_task(run_bulletin_pipeline())
 
     await asyncio.Event().wait()
 
