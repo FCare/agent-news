@@ -128,25 +128,20 @@ async def run_bulletin_pipeline() -> None:
 # Response formatting
 # ---------------------------------------------------------------------------
 
-def _format_flash(bulletin_row: dict) -> str:
+def _format_flash(bulletin_row: dict, category: str | None = None) -> str:
     b = bulletin_row["bulletin_json"]
     date = bulletin_row["date"]
-    return f"[{date}] {b.get('headline', '')}\n\n{b.get('flash', '')}"
-
-
-def _format_bulletin(bulletin_row: dict) -> str:
-    b = bulletin_row["bulletin_json"]
-    date = bulletin_row["date"]
-    parts = [f"JOURNAL DU {date.upper()}", f"{b.get('headline', '')}", "", b.get("flash", ""), ""]
-
-    for cat, stories in b.get("categories", {}).items():
+    categories = b.get("categories", {})
+    parts = [f"[{date}] {b.get('headline', '')}", ""]
+    for cat, stories in categories.items():
+        if category and category.lower() not in cat.lower():
+            continue
         parts.append(f"── {cat.upper()} ──")
-        for story in stories:
-            parts.append(f"\n• {story['title']}")
-            parts.append(story.get("summary", ""))
+        for s in stories:
+            parts.append(f"• {s['title']}")
         parts.append("")
-
     return "\n".join(parts)
+
 
 
 def _format_category(bulletin_row: dict, category: str) -> str | None:
@@ -212,17 +207,6 @@ def _format_deep_dive(bulletin_row: dict, topic_query: str) -> str:
     return "\n".join(parts)
 
 
-def _format_history(history: list[dict]) -> str:
-    if not history:
-        return "Aucun bulletin en archive."
-    parts = ["HISTORIQUE DES BULLETINS", ""]
-    for row in history:
-        parts.append(
-            f"• {row['date']} — {row['headline']} "
-            f"({row['n_topics']} sujets, {row['n_articles']} articles)"
-        )
-    return "\n".join(parts)
-
 # ---------------------------------------------------------------------------
 # MQTT handlers
 # ---------------------------------------------------------------------------
@@ -263,21 +247,22 @@ async def on_user_connected(topic: str, payload) -> None:
                     "Source EXCLUSIVE d'actualités en temps réel. "
                     "OBLIGATOIRE pour toute question sur l'actualité, les nouvelles, les événements récents. "
                     "Choisis le type selon l'intention : "
-                    "flash → résumé rapide de l\\'actu du jour (ex: 'quelles sont les nouvelles ?', 'quoi de neuf ?', 'résume l\\'actu') ; "
-                    "bulletin → journal complet toutes catégories (ex: 'donne-moi le journal complet', 'toutes les nouvelles du jour') ; "
-                    "category → actualité d\\'un domaine précis (ex: 'les nouvelles en Europe', 'l\\'actu tech', 'que se passe-t-il en France aujourd\\'hui ?', 'les nouvelles en Allemagne') ; "
-                    "deep_dive → analyse d\\'un sujet d\\'actualité déjà mentionné ou explicitement récent (ex: 'dis-m\\'en plus sur cette affaire', 'approfondis le sujet du TSV Munich') ; "
-                    "question → question précise sur un fait d\\'actualité (ex: 'qu\\'est-il arrivé avec l\\'AfD ?', 'y a-t-il des nouvelles sur le conflit Iran-USA ?') ; "
-                    "history → bulletins des jours précédents (ex: 'les nouvelles d\\'hier', 'bulletin du 2 juin')."
+                    "flash → TOUJOURS utiliser pour toute demande générale d'actualité. Retourne tous les titres du jour par catégorie. "
+                    f"Accepte 'category' optionnel pour filtrer sur un domaine parmi : {', '.join(bulletin_gen.CATEGORIES)}. "
+                    "Exemples : 'quelles sont les nouvelles ?', 'quoi de neuf ?', 'les titres du jour', 'les nouvelles en Europe', 'l\\'actu tech'. ; "
+                    "question → pour approfondir un sujet ou poser une question précise sur l'actu. "
+                    "Utilise 'query' pour une question libre ou 'topic' pour un titre de sujet. "
+                    "Exemples : 'dis-m\\'en plus sur le TSV Munich', 'qu\\'est-il arrivé avec l\\'AfD ?'. ; "
+                    "Tous les types acceptent un champ 'date' optionnel (YYYY-MM-DD) pour consulter un bulletin passé. Par défaut : aujourd'hui."
                 ),
                 "access": "write",
                 "response_topic": result_topic,
                 "format": {
-                    "type": "flash | bulletin | category | deep_dive | question | history",
-                    "category": "(optionnel) ex: 'Europe', 'Informatique & IA'",
-                    "topic": "(optionnel) mot-clé ou titre de sujet pour deep_dive",
+                    "type": "flash | question",
+                    "category": "(optionnel, pour flash) ex: 'Europe', 'Informatique & IA'",
                     "query": "(optionnel) question libre pour type=question",
-                    "date": "(optionnel) YYYY-MM-DD pour type=history",
+                    "topic": "(optionnel) titre ou mot-clé de sujet pour type=question",
+                    "date": "(optionnel) YYYY-MM-DD, défaut=aujourd'hui",
                 },
             },
             {
@@ -302,10 +287,14 @@ async def on_user_connected(topic: str, payload) -> None:
     async def on_news_request(t: str, p) -> None:
         if not isinstance(p, dict):
             return
-        req_type = p.get("type", "bulletin").lower()
+        req_type = p.get("type", "flash").lower()
         logger.info(f"[{username}] Requête news: {p}")
 
-        bulletin_row = await storage.get_latest_bulletin()
+        date_param = p.get("date", "").strip()
+        if date_param:
+            bulletin_row = await storage.get_bulletin_by_date(date_param)
+        else:
+            bulletin_row = await storage.get_latest_bulletin()
 
         status_note = ""
 
@@ -313,74 +302,40 @@ async def on_user_connected(topic: str, payload) -> None:
 
         if req_type == "flash":
             if bulletin_row:
-                content = _format_flash(bulletin_row) + status_note
+                category_filter = p.get("category", "").strip() if isinstance(p, dict) else None
+                if category_filter:
+                    result = _format_category(bulletin_row, category_filter)
+                    if result is not None:
+                        content = result
+                    else:
+                        llm = _get_llm_client()
+                        content = await bulletin_gen.answer_question(
+                            category_filter, bulletin_row["bulletin_json"], _search_client, llm, LLM_MODEL
+                        )
+                else:
+                    content = _format_flash(bulletin_row)
             else:
                 content = "Bulletin non disponible." + (" Génération en cours..." if _is_generating else "")
 
-        elif req_type == "bulletin":
-            if bulletin_row:
-                content = _format_bulletin(bulletin_row) + status_note
-            else:
-                content = "Bulletin non disponible." + (" Génération en cours..." if _is_generating else "")
-
-        elif req_type == "category":
-            category = p.get("category", "")
-            if not category:
-                content = f"Précise une catégorie. Disponibles: {', '.join(bulletin_gen.CATEGORIES)}"
-            elif bulletin_row:
-                result = _format_category(bulletin_row, category)
-                if result is not None:
-                    content = result
-                else:
-                    llm = _get_llm_client()
-                    content = await bulletin_gen.answer_question(
-                        category, bulletin_row["bulletin_json"], _search_client, llm, LLM_MODEL
-                    )
-            else:
-                content = "Bulletin non disponible."
-
-        elif req_type == "deep_dive":
-            topic_query = p.get("topic", "")
-            if not topic_query:
-                content = "Précise un sujet avec le champ 'topic'."
-            elif bulletin_row:
-                result = _format_deep_dive(bulletin_row, topic_query)
-                if result is not None:
-                    content = result
-                else:
-                    llm = _get_llm_client()
-                    content = await bulletin_gen.answer_question(
-                        topic_query, bulletin_row["bulletin_json"], _search_client, llm, LLM_MODEL
-                    )
-            else:
-                content = "Bulletin non disponible."
-
-        elif req_type == "question":
-            query = p.get("query", "").strip()
+        elif req_type in ("question", "deep_dive"):
+            # Fusionne deep_dive et question : accepte 'query' ou 'topic'
+            query = (p.get("query") or p.get("topic") or "").strip()
             if not query:
-                content = "Précise une question avec le champ 'query'."
+                content = "Précise une question ou un sujet."
             elif bulletin_row:
-                llm = _get_llm_client()
-                content = await bulletin_gen.answer_question(
-                    query, bulletin_row["bulletin_json"], _search_client, llm, LLM_MODEL
-                )
-            else:
-                content = "Aucun bulletin disponible pour répondre à cette question."
-
-        elif req_type == "history":
-            date = p.get("date", "")
-            if date:
-                row = await storage.get_bulletin_by_date(date)
-                if row:
-                    content = _format_bulletin(row)
+                result = _format_deep_dive(bulletin_row, query)
+                if result is not None:
+                    content = result
                 else:
-                    content = f"Pas de bulletin pour le {date}."
+                    llm = _get_llm_client()
+                    content = await bulletin_gen.answer_question(
+                        query, bulletin_row["bulletin_json"], _search_client, llm, LLM_MODEL
+                    )
             else:
-                history = await storage.get_history_list()
-                content = _format_history(history)
+                content = "Aucun bulletin disponible."
 
         else:
-            content = f"Type inconnu: {req_type}. Disponibles: flash, bulletin, category, deep_dive, question, history."
+            content = f"Type inconnu: {req_type}. Disponibles: flash, question."
 
         await nexus.publish(result_topic, {
             "type": req_type,
