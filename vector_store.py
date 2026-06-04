@@ -164,6 +164,33 @@ def search_articles(query: str, n_results: int = 8) -> list[dict]:
         return []
 
 
+def find_similar_publishers(query: str, n_results: int = 5) -> list[str]:
+    """Return distinct publisher names semantically close to the query."""
+    try:
+        col = _articles_collection()
+        count = col.count()
+        if count == 0:
+            return []
+        results = col.query(
+            query_texts=[query],
+            n_results=min(n_results * 4, count),
+            include=["metadatas"],
+        )
+        seen = set()
+        publishers = []
+        for meta in results.get("metadatas", [[]])[0]:
+            p = meta.get("publisher", "")
+            if p and p not in seen:
+                seen.add(p)
+                publishers.append(p)
+            if len(publishers) >= n_results:
+                break
+        return publishers
+    except Exception as e:
+        logger.error(f"ChromaDB find_similar_publishers failed: {e}")
+        return []
+
+
 def purge_old_topics(retention_days: int = 90) -> None:
     """Delete bulletin topics older than retention_days. Mirrors SQLite bulletin retention."""
     from datetime import timedelta

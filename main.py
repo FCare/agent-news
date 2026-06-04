@@ -167,6 +167,15 @@ def _format_category(bulletin_row: dict, category: str) -> str | None:
     return "\n".join(parts)
 
 
+def _format_publisher(articles: list[dict], publisher: str) -> str:
+    if not articles:
+        return f"Aucun article récent de '{publisher}'."
+    parts = [f"ARTICLES RÉCENTS — {publisher.upper()}", ""]
+    for a in articles:
+        parts.append(f"• {a['title']}")
+    return "\n".join(parts)
+
+
 def _format_deep_dive(bulletin_row: dict, topic_query: str) -> str:
     b = bulletin_row["bulletin_json"]
     date = bulletin_row["date"]
@@ -250,6 +259,8 @@ async def on_user_connected(topic: str, payload) -> None:
                     "flash → TOUJOURS utiliser pour toute demande générale d'actualité. Retourne tous les titres du jour par catégorie. "
                     f"Accepte 'category' optionnel pour filtrer sur un domaine parmi : {', '.join(bulletin_gen.CATEGORIES)}. "
                     "Exemples : 'quelles sont les nouvelles ?', 'quoi de neuf ?', 'les titres du jour', 'les nouvelles en Europe', 'l\\'actu tech'. ; "
+                    "source → articles récents d\\'un site ou média précis. Utilise 'publisher' pour le nom du site. "
+                    "Exemples : 'les nouvelles de Korben', 'quoi de neuf sur Ars Technica ?', 'les articles de 01net'. ; "
                     "question → pour approfondir un sujet ou poser une question précise sur l'actu. "
                     "Utilise 'query' pour une question libre ou 'topic' pour un titre de sujet. "
                     "Exemples : 'dis-m\\'en plus sur le TSV Munich', 'qu\\'est-il arrivé avec l\\'AfD ?'. ; "
@@ -258,8 +269,9 @@ async def on_user_connected(topic: str, payload) -> None:
                 "access": "write",
                 "response_topic": result_topic,
                 "format": {
-                    "type": "flash | question",
+                    "type": "flash | source | question",
                     "category": "(optionnel, pour flash) ex: 'Europe', 'Informatique & IA'",
+                    "publisher": "(requis pour source) ex: 'Korben', 'Ars Technica'",
                     "query": "(optionnel) question libre pour type=question",
                     "topic": "(optionnel) titre ou mot-clé de sujet pour type=question",
                     "date": "(optionnel) YYYY-MM-DD, défaut=aujourd'hui",
@@ -317,6 +329,24 @@ async def on_user_connected(topic: str, payload) -> None:
             else:
                 content = "Bulletin non disponible." + (" Génération en cours..." if _is_generating else "")
 
+        elif req_type == "source":
+            publisher = p.get("publisher", "").strip()
+            if not publisher:
+                content = "Précise un site ou média avec le champ 'publisher'."
+            else:
+                articles = await storage.get_articles_by_publisher(publisher)
+                if articles:
+                    content = _format_publisher(articles, publisher)
+                else:
+                    loop = asyncio.get_event_loop()
+                    similar = await loop.run_in_executor(
+                        None, vector_store.find_similar_publishers, publisher
+                    )
+                    if similar:
+                        content = f"Aucun article trouvé pour '{publisher}'. Sources proches disponibles : {', '.join(similar)}"
+                    else:
+                        content = f"Aucun article trouvé pour '{publisher}'."
+
         elif req_type in ("question", "deep_dive"):
             # Fusionne deep_dive et question : accepte 'query' ou 'topic'
             query = (p.get("query") or p.get("topic") or "").strip()
@@ -335,7 +365,7 @@ async def on_user_connected(topic: str, payload) -> None:
                 content = "Aucun bulletin disponible."
 
         else:
-            content = f"Type inconnu: {req_type}. Disponibles: flash, question."
+            content = f"Type inconnu: {req_type}. Disponibles: flash, source, question."
 
         await nexus.publish(result_topic, {
             "type": req_type,
