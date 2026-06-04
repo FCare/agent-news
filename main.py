@@ -252,6 +252,52 @@ async def on_user_connected(topic: str, payload) -> None:
 
     await nexus.publish(agent_topics_topic, [{
         "agent": AGENT_NAME,
+        "intents": [
+            {
+                "name": "news.flash",
+                "description": "Actualités générales du jour, tous les titres par catégorie",
+                "examples": [
+                    "Quelles sont les nouvelles du jour ?",
+                    "Quoi de neuf aujourd'hui ?",
+                    "Donne-moi les titres du jour.",
+                    "Qu'est-ce qui se passe dans le monde ?",
+                ],
+                "payload": {"type": "flash"},
+            },
+            {
+                "name": "news.flash_category",
+                "description": "Actualités d'une catégorie thématique précise",
+                "examples": [
+                    "Quelles sont les nouvelles en Europe ?",
+                    "Donne-moi l'actualité technologique du jour.",
+                    "Que se passe-t-il en France aujourd'hui ?",
+                    "Les dernières nouvelles sur la géopolitique.",
+                ],
+                "payload": {"type": "flash", "category": "{category}"},
+            },
+            {
+                "name": "news.source",
+                "description": "Articles récents publiés par un site ou média précis",
+                "examples": [
+                    "Quelles sont les dernières nouvelles du site Korben ?",
+                    "Donne-moi les articles récents de Ars Technica.",
+                    "Quoi de neuf sur le site France Info ?",
+                    "Les articles publiés par Le Monde aujourd'hui.",
+                ],
+                "payload": {"type": "source", "publisher": "{publisher}"},
+            },
+            {
+                "name": "news.question",
+                "description": "Question précise ou approfondissement sur un sujet d'actualité",
+                "examples": [
+                    "Qu'est-il arrivé avec l'AfD récemment ?",
+                    "Dis-moi en plus sur le conflit au Proche-Orient.",
+                    "Explique-moi la situation économique en Allemagne.",
+                    "Quelles sont les dernières informations sur l'intelligence artificielle ?",
+                ],
+                "payload": {"type": "question", "query": "{query}"},
+            },
+        ],
         "topics": [
             {
                 "topic": request_topic,
