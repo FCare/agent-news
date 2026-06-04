@@ -140,6 +140,17 @@ async def get_articles_by_publisher(publisher: str, hours: int = ARTICLES_TTL_HO
     return [dict(r) for r in rows]
 
 
+async def get_distinct_publishers(hours: int = ARTICLES_TTL_HOURS) -> list[str]:
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    async with aiosqlite.connect(DB_PATH) as db:
+        async with db.execute(
+            "SELECT DISTINCT publisher FROM articles WHERE crawled_at > ? AND publisher != '' ORDER BY publisher",
+            (cutoff,)
+        ) as cur:
+            rows = await cur.fetchall()
+    return [r[0] for r in rows]
+
+
 async def purge_old_data() -> None:
     articles_cutoff = (datetime.now(timezone.utc) - timedelta(hours=ARTICLES_TTL_HOURS)).isoformat()
     bulletins_cutoff = (datetime.now(timezone.utc) - timedelta(days=BULLETIN_RETENTION_DAYS)).strftime("%Y-%m-%d")

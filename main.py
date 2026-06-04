@@ -248,6 +248,8 @@ async def on_user_connected(topic: str, payload) -> None:
 
     nexus = NexusClient.from_api_key(VK_URL, MQTT_HOST, SERVICE_USERNAME, SERVICE_API_KEY, MQTT_PORT)
 
+    publishers = await storage.get_distinct_publishers()
+
     await nexus.publish(agent_topics_topic, [{
         "agent": AGENT_NAME,
         "topics": [
@@ -272,7 +274,7 @@ async def on_user_connected(topic: str, payload) -> None:
                 "format": {
                     "type": "flash | source | question",
                     "category": "(optionnel, pour flash) ex: 'Europe', 'Informatique & IA'",
-                    "publisher": "(requis pour source) ex: 'Korben', 'Ars Technica'",
+                    "publisher": publishers,
                     "query": "(optionnel) question libre pour type=question",
                     "topic": "(optionnel) titre ou mot-clé de sujet pour type=question",
                     "date": "(optionnel) YYYY-MM-DD, défaut=aujourd'hui",
