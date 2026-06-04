@@ -82,6 +82,7 @@ async def run_bulletin_pipeline() -> None:
         await storage.save_articles(rows)
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, vector_store.upsert_articles, rows)
+        await loop.run_in_executor(None, vector_store.upsert_publishers, rows)
 
         # 3. Generate bulletin
         logger.info("[2/4] Clustering et identification des sujets...")
@@ -409,10 +410,13 @@ async def main() -> None:
     scheduler.start()
 
     # Initial run — skip if a bulletin already exists for today
+    loop = asyncio.get_event_loop()
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     existing = await storage.get_bulletin_by_date(today)
     if existing:
         logger.info(f"Bulletin du {today} déjà présent, pipeline ignoré au démarrage.")
+        articles = await storage.get_recent_articles()
+        await loop.run_in_executor(None, vector_store.seed_publishers_if_empty, articles)
     else:
         logger.info("Aucun bulletin pour aujourd'hui, lancement du pipeline...")
         asyncio.create_task(run_bulletin_pipeline())

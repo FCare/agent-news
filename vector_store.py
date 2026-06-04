@@ -1,9 +1,10 @@
 """
 ChromaDB vector store for semantic search over articles and bulletin topics.
 
-Two collections:
+Three collections:
 - articles       : crawled article bodies (TTL = crawler TTL)
 - bulletin_topics: deep dives from generated bulletins (kept 3 months)
+- publishers     : distinct publisher names for fuzzy/semantic lookup
 """
 
 import hashlib
@@ -20,6 +21,7 @@ EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
 _client = None
 _articles_col = None
 _topics_col = None
+_publishers_col = None
 
 
 def _get_client():
@@ -56,6 +58,17 @@ def _topics_collection():
             metadata={"hnsw:space": "cosine"},
         )
     return _topics_col
+
+
+def _publishers_collection():
+    global _publishers_col
+    if _publishers_col is None:
+        _publishers_col = _get_client().get_or_create_collection(
+            name="publishers",
+            embedding_function=_get_ef(),
+            metadata={"hnsw:space": "cosine"},
+        )
+    return _publishers_col
 
 
 def _article_id(url: str) -> str:
@@ -99,6 +112,47 @@ def upsert_articles(articles: list[dict]) -> None:
         logger.info(f"ChromaDB: {len(ids)} articles upsertés")
     except Exception as e:
         logger.error(f"ChromaDB upsert articles failed: {e}")
+
+
+def upsert_publishers(articles: list[dict]) -> None:
+    """Keep the publishers collection in sync after each crawl."""
+    publishers = {a["publisher"] for a in articles if a.get("publisher")}
+    if not publishers:
+        return
+    try:
+        col = _publishers_collection()
+        ids = [hashlib.md5(p.encode()).hexdigest() for p in publishers]
+        col.upsert(ids=ids, documents=list(publishers))
+    except Exception as e:
+        logger.error(f"ChromaDB upsert publishers failed: {e}")
+
+
+def seed_publishers_if_empty(articles: list[dict]) -> None:
+    """Populate the publishers collection from existing articles if it is empty."""
+    try:
+        if _publishers_collection().count() == 0:
+            upsert_publishers(articles)
+            logger.info(f"ChromaDB: publishers seedés depuis {len(articles)} articles existants")
+    except Exception as e:
+        logger.error(f"ChromaDB seed publishers failed: {e}")
+
+
+def find_similar_publishers(query: str, n_results: int = 5) -> list[str]:
+    """Return publisher names semantically close to the query (handles typos/voice)."""
+    try:
+        col = _publishers_collection()
+        count = col.count()
+        if count == 0:
+            return []
+        results = col.query(
+            query_texts=[query],
+            n_results=min(n_results, count),
+            include=["documents"],
+        )
+        return results.get("documents", [[]])[0]
+    except Exception as e:
+        logger.error(f"ChromaDB find_similar_publishers failed: {e}")
+        return []
 
 
 def upsert_bulletin_topics(bulletin_json: dict, date: str) -> None:
@@ -161,33 +215,6 @@ def search_articles(query: str, n_results: int = 8) -> list[dict]:
         return _format_results(results)
     except Exception as e:
         logger.error(f"ChromaDB search articles failed: {e}")
-        return []
-
-
-def find_similar_publishers(query: str, n_results: int = 5) -> list[str]:
-    """Return distinct publisher names semantically close to the query."""
-    try:
-        col = _articles_collection()
-        count = col.count()
-        if count == 0:
-            return []
-        results = col.query(
-            query_texts=[query],
-            n_results=min(n_results * 4, count),
-            include=["metadatas"],
-        )
-        seen = set()
-        publishers = []
-        for meta in results.get("metadatas", [[]])[0]:
-            p = meta.get("publisher", "")
-            if p and p not in seen:
-                seen.add(p)
-                publishers.append(p)
-            if len(publishers) >= n_results:
-                break
-        return publishers
-    except Exception as e:
-        logger.error(f"ChromaDB find_similar_publishers failed: {e}")
         return []
 
 
