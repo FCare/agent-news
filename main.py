@@ -163,8 +163,7 @@ def _format_category(bulletin_row: dict, category: str) -> str | None:
     parts = [f"[{date}] {matched.upper()}", ""]
     for story in stories:
         parts.append(f"• {story['title']}")
-        parts.append(story.get("summary", ""))
-        parts.append("")
+    parts.append("")
     return "\n".join(parts)
 
 
@@ -288,7 +287,6 @@ async def on_user_connected(topic: str, payload) -> None:
                     "type": "string",
                     "content": "string",
                     "bulletin_date": "YYYY-MM-DD",
-                    "is_generating": "bool",
                 },
             },
         ],
@@ -330,7 +328,7 @@ async def on_user_connected(topic: str, payload) -> None:
                 else:
                     content = _format_flash(bulletin_row)
             else:
-                content = "Bulletin non disponible." + (" Génération en cours..." if _is_generating else "")
+                content = "Bulletin non disponible."
 
         elif req_type == "source":
             publisher = p.get("publisher", "").strip()
@@ -374,7 +372,6 @@ async def on_user_connected(topic: str, payload) -> None:
             "type": req_type,
             "content": content,
             "bulletin_date": bulletin_row["date"] if bulletin_row else "",
-            "is_generating": _is_generating,
         })
 
     nexus.subscribe(request_topic, on_news_request)
