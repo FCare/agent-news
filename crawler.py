@@ -131,7 +131,7 @@ RSS_FEEDS = [
     ("https://www.cbr.com/feed/",                                        "CBR Comics",          "US"),
 ]
 
-REGIONS = ["us", "uk", "de", "fr", "es", "at", "ch", "nl"]
+REGIONS = ["us", "uk", "fr", "es", "nl"]
 
 
 @dataclass
