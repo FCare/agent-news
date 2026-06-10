@@ -94,12 +94,18 @@ def upsert_articles(articles: list[dict]) -> None:
             doc = f"{a['title']}\n{(a.get('body') or '')[:800]}"
             ids.append(_article_id(a["url"]))
             docs.append(doc)
+            crawled_at_str = a.get("crawled_at", datetime.now(timezone.utc).isoformat())
+            try:
+                crawled_at_ts = int(datetime.fromisoformat(crawled_at_str).timestamp())
+            except Exception:
+                crawled_at_ts = int(datetime.now(timezone.utc).timestamp())
             metas.append({
-                "url":       a["url"],
-                "title":     a["title"],
-                "publisher": a.get("publisher", ""),
-                "country":   a.get("country", ""),
-                "crawled_at": a.get("crawled_at", datetime.now(timezone.utc).isoformat()),
+                "url":        a["url"],
+                "title":      a["title"],
+                "publisher":  a.get("publisher", ""),
+                "country":    a.get("country", ""),
+                "crawled_at": crawled_at_str,
+                "crawled_ts": crawled_at_ts,
             })
         # Batch upsert (ChromaDB handles duplicates)
         BATCH = 100
@@ -221,14 +227,14 @@ def search_articles(query: str, n_results: int = 8) -> list[dict]:
 def purge_old_articles(retention_days: int = 3) -> None:
     """Delete raw articles older than retention_days from the vector store."""
     from datetime import timedelta
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
+    cutoff_ts = int((datetime.now(timezone.utc) - timedelta(days=retention_days)).timestamp())
     try:
         col = _articles_collection()
         before = col.count()
-        col.delete(where={"crawled_at": {"$lt": cutoff}})
+        col.delete(where={"crawled_ts": {"$lt": cutoff_ts}})
         deleted = before - col.count()
         if deleted:
-            logger.info(f"ChromaDB: {deleted} articles supprimés (antérieurs au {cutoff[:10]})")
+            logger.info(f"ChromaDB: {deleted} articles supprimés (antérieurs à J-{retention_days})")
     except Exception as e:
         logger.error(f"ChromaDB purge articles failed: {e}")
 
