@@ -583,8 +583,9 @@ async def answer_question(query: str, bulletin: dict, search_client: SearchClien
         llm_client, model,
         system=(
             "Tu es un expert en actualités. Réponds à la question en français, ton oral, factuel. "
-            "Base-toi uniquement sur le contexte fourni. "
-            "Si le contexte ne couvre pas le sujet, indique needs_web_search=true. "
+            "RÈGLE ABSOLUE : utilise UNIQUEMENT les informations du contexte fourni. "
+            "N'utilise jamais tes connaissances générales ou d'entraînement. "
+            "Si le contexte ne mentionne pas clairement le sujet demandé, indique needs_web_search=true sans inventer de réponse. "
             "Appelle answer_question."
         ),
         user=(
