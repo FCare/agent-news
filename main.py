@@ -275,10 +275,9 @@ async def on_user_connected(topic: str, payload) -> None:
                 "response_topic": result_topic,
                 "format": {
                     "type": "flash | source | question",
-                    "category": "(optionnel, pour flash) ex: 'Europe', 'Informatique & IA'",
-                    "publisher": publishers,
-                    "query": "(optionnel) question libre pour type=question",
-                    "topic": "(optionnel) titre ou mot-clé de sujet pour type=question",
+                    "flash_fields": {"category": "(optionnel) ex: 'Europe', 'Informatique & IA'"},
+                    "source_fields": {"publisher": publishers},
+                    "question_fields": {"query": "question ou sujet précis"},
                     "date": "(optionnel) YYYY-MM-DD, défaut=aujourd'hui",
                 },
             },
