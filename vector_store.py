@@ -91,7 +91,7 @@ def upsert_articles(articles: list[dict]) -> None:
         col = _articles_collection()
         ids, docs, metas = [], [], []
         for a in articles:
-            doc = f"{a['title']}\n{(a.get('body') or '')[:800]}"
+            doc = f"{a['title']}\n{(a.get('body') or '')}"
             ids.append(_article_id(a["url"]))
             docs.append(doc)
             crawled_at_str = a.get("crawled_at", datetime.now(timezone.utc).isoformat())

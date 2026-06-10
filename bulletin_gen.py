@@ -551,9 +551,8 @@ def _format_article_hits(query: str, hits: list[dict]) -> str:
         meta = h["metadata"]
         title = meta.get("title") or h["content"].split("\n")[0]
         publisher = meta.get("publisher", "")
-        # content = "title\nbody" — extract first sentence of body
         lines = h["content"].split("\n", 1)
-        excerpt = lines[1][:200].strip() if len(lines) > 1 else ""
+        excerpt = lines[1].strip() if len(lines) > 1 else ""
         parts.append(f"• [{publisher}] {title}")
         if excerpt:
             parts.append(f"  {excerpt}")
