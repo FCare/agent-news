@@ -268,7 +268,12 @@ async def on_user_connected(topic: str, payload) -> None:
                     "Exemples : 'les nouvelles ?' → category='France' ; 'l\\'actu en Europe' → category='Europe' ; 'l\\'actu tech' → category='Informatique & IA'. ; "
                     "question → pour TOUT sujet, pays, personne, événement ou période précis (ex: Ukraine, Trump, Gaza, grève SNCF, nuit dernière, ce matin). "
                     "C\\'est le type par défaut dès que l\\'utilisateur demande quelque chose de spécifique. NE JAMAIS choisir source à la place. "
-                    "Exemples : 'les nouvelles en Ukraine' → query='ukraine' ; 'la nuit dernière en Ukraine' → query='ukraine nuit dernière' ; 'quoi de neuf avec Trump ?' → query='trump'. ; "
+                    "IMPORTANT : query = sujet/entité uniquement, JAMAIS de référence temporelle. "
+                    "La date et la période sont déduites automatiquement. "
+                    "Exemples : 'les nouvelles en Ukraine' → query='ukraine' ; "
+                    "'la nuit dernière en Ukraine' → query='ukraine' ; "
+                    "'les événements de ce matin en Gaza' → query='gaza' ; "
+                    "'quoi de neuf avec Trump ?' → query='trump'. ; "
                     "Tous les types acceptent un champ 'date' optionnel (YYYY-MM-DD) pour consulter un bulletin passé. Par défaut : aujourd'hui."
                 ),
                 "access": "write",
