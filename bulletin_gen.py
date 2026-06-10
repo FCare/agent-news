@@ -579,9 +579,11 @@ async def answer_question(query: str, bulletin: dict, search_client: SearchClien
     context_block = "\n\n---\n\n".join(context_parts) if context_parts else ""
 
     # 3. LLM answer from semantic context
+    now = datetime.now(timezone.utc)
     result = await _llm(
         llm_client, model,
         system=(
+            f"Nous sommes le {now.strftime('%A %d %B %Y à %Hh%M UTC')}. "
             "Tu es un expert en actualités. Réponds à la question en français, ton oral, factuel. "
             "RÈGLE ABSOLUE : utilise UNIQUEMENT les informations du contexte fourni. "
             "N'utilise jamais tes connaissances générales ou d'entraînement. "
@@ -590,7 +592,7 @@ async def answer_question(query: str, bulletin: dict, search_client: SearchClien
         ),
         user=(
             f"Question: {query}\n\n"
-            f"Contexte (résultats sémantiques):\n{context_block or '(aucun résultat)'}"
+            f"Contexte (résultats sémantiques — chaque article indique sa date de crawl):\n{context_block or '(aucun résultat)'}"
         ),
         tool=_ANSWER_TOOL,
     )

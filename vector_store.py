@@ -218,6 +218,21 @@ def search_articles(query: str, n_results: int = 8) -> list[dict]:
         return []
 
 
+def purge_old_articles(retention_days: int = 3) -> None:
+    """Delete raw articles older than retention_days from the vector store."""
+    from datetime import timedelta
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=retention_days)).isoformat()
+    try:
+        col = _articles_collection()
+        before = col.count()
+        col.delete(where={"crawled_at": {"$lt": cutoff}})
+        deleted = before - col.count()
+        if deleted:
+            logger.info(f"ChromaDB: {deleted} articles supprimés (antérieurs au {cutoff[:10]})")
+    except Exception as e:
+        logger.error(f"ChromaDB purge articles failed: {e}")
+
+
 def purge_old_topics(retention_days: int = 90) -> None:
     """Delete bulletin topics older than retention_days. Mirrors SQLite bulletin retention."""
     from datetime import timedelta
