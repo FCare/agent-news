@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+from datetime import datetime, timezone
 
 import openai
 
@@ -523,6 +524,32 @@ async def generate_bulletin(articles: list[RawArticle], search_client: SearchCli
 # Question answering (ChromaDB semantic search)
 # ---------------------------------------------------------------------------
 
+_SCORE_THRESHOLD = 0.30  # minimum cosine similarity to consider a hit relevant
+
+
+def _format_topic_hits(query: str, hits: list[dict]) -> str:
+    """Format bulletin topic hits as a titled list."""
+    date = hits[0]["metadata"].get("date", "")
+    parts = [f"[{date}] {query.upper()}", ""]
+    for h in hits:
+        meta = h["metadata"]
+        parts.append(f"• [{meta.get('category', '')}] {meta.get('title', '')}")
+    parts.append("")
+    return "\n".join(parts)
+
+
+def _format_article_hits(query: str, hits: list[dict]) -> str:
+    """Format raw article hits as a titled list."""
+    parts = [f"ARTICLES RÉCENTS — {query.upper()}", ""]
+    for h in hits:
+        meta = h["metadata"]
+        title = meta.get("title") or h["content"].split("\n")[0]
+        publisher = meta.get("publisher", "")
+        parts.append(f"• [{publisher}] {title}")
+    parts.append("")
+    return "\n".join(parts)
+
+
 async def answer_question(query: str, bulletin: dict, search_client: SearchClient,
                            llm_client: openai.OpenAI, model: str) -> str:
     import vector_store
@@ -530,95 +557,44 @@ async def answer_question(query: str, bulletin: dict, search_client: SearchClien
     loop = asyncio.get_event_loop()
 
     # 1. Semantic search in bulletin topics (deep dives)
-    topic_hits = await loop.run_in_executor(
-        None, vector_store.search_topics, query, 10
-    )
+    topic_hits = await loop.run_in_executor(None, vector_store.search_topics, query, 10)
+    relevant_topics = [h for h in topic_hits if h["score"] >= _SCORE_THRESHOLD]
+
     # 2. Semantic search in raw articles
-    article_hits = await loop.run_in_executor(
-        None, vector_store.search_articles, query, 10
-    )
+    article_hits = await loop.run_in_executor(None, vector_store.search_articles, query, 10)
+    relevant_articles = [h for h in article_hits if h["score"] >= _SCORE_THRESHOLD]
 
     logger.info(
-        f"ChromaDB '{query[:50]}': {len(topic_hits)} topics, {len(article_hits)} articles"
+        f"ChromaDB '{query[:50]}': {len(relevant_topics)}/{len(topic_hits)} topics, "
+        f"{len(relevant_articles)}/{len(article_hits)} articles (seuil={_SCORE_THRESHOLD})"
     )
 
-    # Translate raw article excerpts to French before building context
-    if article_hits:
-        raw_excerpts = [h["content"][:400] for h in article_hits]
-        result = await _llm(
-            llm_client, model,
-            system=(
-                "Traduis chaque extrait numéroté en français. "
-                "Conserve le même ordre et la même numérotation. "
-                "Appelle translate_excerpts."
-            ),
-            user="\n\n".join(f"[{i+1}] {t}" for i, t in enumerate(raw_excerpts)),
-            tool=_TRANSLATE_TOOL,
-        )
-        translated = result.get("translations", [])
-        if len(translated) == len(article_hits):
-            for i, h in enumerate(article_hits):
-                h["content"] = translated[i]
+    # Return directly if we have relevant results — no LLM needed
+    if relevant_topics:
+        return _format_topic_hits(query, relevant_topics)
+    if relevant_articles:
+        return _format_article_hits(query, relevant_articles)
 
-    # Build context from semantic hits (all in French)
-    context_parts = []
-    for h in topic_hits:
-        meta = h["metadata"]
-        context_parts.append(
-            f"[{meta.get('category','')} — {meta.get('date','')} — score {h['score']}]\n"
-            f"{h['content'][:600]}"
-        )
-    for h in article_hits:
-        meta = h["metadata"]
-        context_parts.append(
-            f"[{meta.get('publisher','')} — score {h['score']}]\n"
-            f"{h['content'][:400]}"
-        )
+    # 3. Web search fallback (no relevant ChromaDB results)
+    logger.info(f"Question '{query[:50]}' → pas de résultat ChromaDB, recherche web")
+    search_results = await search_client.search_many(
+        [query, f"{query} actualité récente"], "news"
+    )
+    reports = [r.get("report", "") for r in search_results if r.get("report")]
+    if not reports:
+        return "Je n'ai pas trouvé d'information sur ce sujet dans l'actualité récente."
 
-    has_context = bool(context_parts)
-    context_block = "\n\n---\n\n".join(context_parts) if context_parts else ""
-
-    # 3. LLM answer from semantic context
+    search_block = "\n\n".join(r[:800] for r in reports[:4])
     now = datetime.now(timezone.utc)
     result = await _llm(
         llm_client, model,
         system=(
             f"Nous sommes le {now.strftime('%A %d %B %Y à %Hh%M UTC')}. "
-            "Tu es un expert en actualités. Réponds à la question en français, ton oral, factuel. "
-            "RÈGLE ABSOLUE : utilise UNIQUEMENT les informations du contexte fourni. "
-            "N'utilise jamais tes connaissances générales ou d'entraînement. "
-            "Si le contexte ne mentionne pas clairement le sujet demandé, indique needs_web_search=true sans inventer de réponse. "
-            "Appelle answer_question."
+            "Tu es expert en actualités. Réponds à la question en français, "
+            "ton oral, factuel, à partir des résultats de recherche fournis. "
+            "Appelle answer_question avec needs_web_search=false."
         ),
-        user=(
-            f"Question: {query}\n\n"
-            f"Contexte (résultats sémantiques — chaque article indique sa date de crawl):\n{context_block or '(aucun résultat)'}"
-        ),
+        user=f"Question: {query}\n\nRecherches:\n{search_block}",
         tool=_ANSWER_TOOL,
     )
-
-    answer = result.get("answer", "")
-    needs_search = result.get("needs_web_search", False) or not has_context
-
-    # 4. Web search fallback si pas de contexte ou LLM non satisfait
-    if needs_search or not answer:
-        logger.info(f"Question '{query[:50]}' → recherche web complémentaire")
-        search_results = await search_client.search_many(
-            [query, f"{query} actualité récente"], "news"
-        )
-        reports = [r.get("report", "") for r in search_results if r.get("report")]
-        if reports:
-            search_block = "\n\n".join(r[:800] for r in reports[:4])
-            result2 = await _llm(
-                llm_client, model,
-                system=(
-                    "Tu es expert en actualités. Réponds à la question en français, "
-                    "ton oral, factuel, à partir des résultats de recherche. "
-                    "Appelle answer_question avec needs_web_search=false."
-                ),
-                user=f"Question: {query}\n\nRecherches:\n{search_block}",
-                tool=_ANSWER_TOOL,
-            )
-            answer = result2.get("answer", answer)
-
-    return answer or "Je n'ai pas trouvé d'information sur ce sujet dans l'actualité récente."
+    return result.get("answer") or "Je n'ai pas trouvé d'information sur ce sujet dans l'actualité récente."
