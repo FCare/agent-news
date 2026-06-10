@@ -258,31 +258,31 @@ async def on_user_connected(topic: str, payload) -> None:
                 "description": (
                     "Source EXCLUSIVE d'actualités en temps réel. "
                     "OBLIGATOIRE pour toute question sur l'actualité, les nouvelles, les événements récents. "
-                    "Choisis le type selon l'intention : "
-                    "source → UNIQUEMENT si l\\'utilisateur cite explicitement un média par son nom (ex: 'les nouvelles de Korben', 'quoi de neuf sur France Info', 'les articles de 01net'). "
-                    "NE PAS utiliser source si l\\'utilisateur pose une question sur un sujet, même si un média vient à l\\'esprit. "
-                    "Utilise 'publisher' avec le nom exact du média tel qu\\'il apparaît dans la liste. ; "
-                    "flash → pour une demande générale d\\'actualité sans sujet précis. "
-                    f"Accepte 'category' optionnel parmi : {', '.join(bulletin_gen.CATEGORIES)}. "
-                    "Si l\\'utilisateur ne précise pas de domaine, utilise category='France' par défaut. "
-                    "Exemples : 'les nouvelles ?' → category='France' ; 'l\\'actu en Europe' → category='Europe' ; 'l\\'actu tech' → category='Informatique & IA'. ; "
-                    "question → pour TOUT sujet, pays, personne, événement ou période précis (ex: Ukraine, Trump, Gaza, grève SNCF, nuit dernière, ce matin). "
-                    "C\\'est le type par défaut dès que l\\'utilisateur demande quelque chose de spécifique. NE JAMAIS choisir source à la place. "
-                    "IMPORTANT : query = sujet/entité uniquement, JAMAIS de référence temporelle. "
-                    "La date et la période sont déduites automatiquement. "
-                    "Exemples : 'les nouvelles en Ukraine' → query='ukraine' ; "
-                    "'la nuit dernière en Ukraine' → query='ukraine' ; "
-                    "'les événements de ce matin en Gaza' → query='gaza' ; "
-                    "'quoi de neuf avec Trump ?' → query='trump'. ; "
-                    "Tous les types acceptent un champ 'date' optionnel (YYYY-MM-DD) pour consulter un bulletin passé. Par défaut : aujourd'hui."
+                    "Deux types disponibles : "
+                    "news_fetch → pour toute demande d\\'actualité. "
+                    "Sans 'query' : retourne le flash du jour (titres des sujets). "
+                    "Avec 'query' : répond à une question sur un sujet, pays, personne ou événement précis. "
+                    "query = sujet/entité uniquement, SANS référence temporelle (la date est automatique). "
+                    f"Accepte 'category' optionnel parmi : {', '.join(bulletin_gen.CATEGORIES)} — seulement si PAS de query. "
+                    "Si l\\'utilisateur ne précise pas de domaine pour le flash, utilise category='France'. "
+                    "Exemples : "
+                    "'les nouvelles ?' → news_fetch/category='France' ; "
+                    "'l\\'actu tech' → news_fetch/category='Informatique & IA' ; "
+                    "'les nouvelles en Ukraine' → news_fetch/query='ukraine' ; "
+                    "'la nuit dernière en Ukraine' → news_fetch/query='ukraine' ; "
+                    "'quoi de neuf avec Trump ?' → news_fetch/query='trump'. ; "
+                    "source → UNIQUEMENT si l\\'utilisateur cite explicitement un média par son nom "
+                    "(ex: 'les nouvelles de Korben', 'les articles de 01net'). "
+                    "Utilise 'publisher' avec le nom exact du média tel qu\\'il apparaît dans la liste. "
+                    "Tous les types acceptent 'date' optionnel (YYYY-MM-DD) pour un bulletin passé."
                 ),
                 "access": "write",
                 "response_topic": result_topic,
                 "format": {
-                    "type": "flash | source | question",
-                    "flash_fields": {"category": "(optionnel) ex: 'Europe', 'Informatique & IA'"},
-                    "source_fields": {"publisher": publishers},
-                    "question_fields": {"query": "question ou sujet précis"},
+                    "type": "news_fetch | source",
+                    "query": "(optionnel) sujet/entité pour news_fetch, ex: 'ukraine', 'trump'",
+                    "category": f"(optionnel, news_fetch sans query) ex: {', '.join(bulletin_gen.CATEGORIES[:4])}...",
+                    "publisher": "(source uniquement) " + str(publishers),
                     "date": "(optionnel) YYYY-MM-DD, défaut=aujourd'hui",
                 },
             },
@@ -307,7 +307,7 @@ async def on_user_connected(topic: str, payload) -> None:
     async def on_news_request(t: str, p) -> None:
         if not isinstance(p, dict):
             return
-        req_type = p.get("type", "flash").lower()
+        req_type = p.get("type", "news_fetch").lower()
         logger.info(f"[{username}] Requête news: {p}")
 
         date_param = p.get("date", "").strip()
@@ -316,26 +316,35 @@ async def on_user_connected(topic: str, payload) -> None:
         else:
             bulletin_row = await storage.get_latest_bulletin()
 
-        status_note = ""
-
         content = ""
 
-        if req_type == "flash":
-            if bulletin_row:
-                category_filter = p.get("category", "").strip() if isinstance(p, dict) else None
-                if category_filter:
-                    result = _format_category(bulletin_row, category_filter)
+        if req_type in ("news_fetch", "flash", "question", "deep_dive"):
+            query = (p.get("query") or p.get("topic") or "").strip()
+
+            if query:
+                # Subject/entity query → semantic search + LLM answer
+                if bulletin_row:
+                    result = _format_deep_dive(bulletin_row, query)
                     if result is not None:
                         content = result
                     else:
                         llm = _get_llm_client()
                         content = await bulletin_gen.answer_question(
-                            category_filter, bulletin_row["bulletin_json"], _search_client, llm, LLM_MODEL
+                            query, bulletin_row["bulletin_json"], _search_client, llm, LLM_MODEL
                         )
                 else:
-                    content = _format_flash(bulletin_row)
+                    content = "Aucun bulletin disponible."
             else:
-                content = "Bulletin non disponible."
+                # No query → flash (full or filtered by category)
+                if bulletin_row:
+                    category_filter = p.get("category", "").strip()
+                    if category_filter:
+                        result = _format_category(bulletin_row, category_filter)
+                        content = result if result is not None else _format_flash(bulletin_row, category_filter)
+                    else:
+                        content = _format_flash(bulletin_row)
+                else:
+                    content = "Bulletin non disponible."
 
         elif req_type == "source":
             publisher = p.get("publisher", "").strip()
@@ -355,25 +364,8 @@ async def on_user_connected(topic: str, payload) -> None:
                     else:
                         content = f"Aucun article trouvé pour '{publisher}'."
 
-        elif req_type in ("question", "deep_dive"):
-            # Fusionne deep_dive et question : accepte 'query' ou 'topic'
-            query = (p.get("query") or p.get("topic") or "").strip()
-            if not query:
-                content = "Précise une question ou un sujet."
-            elif bulletin_row:
-                result = _format_deep_dive(bulletin_row, query)
-                if result is not None:
-                    content = result
-                else:
-                    llm = _get_llm_client()
-                    content = await bulletin_gen.answer_question(
-                        query, bulletin_row["bulletin_json"], _search_client, llm, LLM_MODEL
-                    )
-            else:
-                content = "Aucun bulletin disponible."
-
         else:
-            content = f"Type inconnu: {req_type}. Disponibles: flash, source, question."
+            content = f"Type inconnu: {req_type}. Disponibles: news_fetch, source."
 
         await nexus.publish(result_topic, {
             "type": req_type,
