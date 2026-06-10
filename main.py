@@ -367,7 +367,7 @@ async def on_user_connected(topic: str, payload) -> None:
         else:
             content = f"Type inconnu: {req_type}. Disponibles: news_fetch, source."
 
-        logger.info(f"[{username}] Réponse ({len(content)} chars):\n{content[:500]}")
+        logger.info(f"[{username}] Réponse ({len(content)} chars):\n{content}")
         await nexus.publish(result_topic, {
             "type": req_type,
             "content": content,
