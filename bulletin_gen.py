@@ -574,6 +574,10 @@ async def answer_question(query: str, bulletin: dict, search_client: SearchClien
     article_hits = await loop.run_in_executor(None, vector_store.search_articles, query, 10)
     relevant_articles = [h for h in article_hits if h["score"] >= _SCORE_THRESHOLD]
 
+    for h in topic_hits:
+        logger.info(f"  topic  score={h['score']:.3f} : {h['metadata'].get('title','')[:80]}")
+    for h in article_hits:
+        logger.info(f"  article score={h['score']:.3f} : {h['metadata'].get('title','')[:80]}")
     logger.info(
         f"ChromaDB '{query[:50]}': {len(relevant_topics)}/{len(topic_hits)} topics, "
         f"{len(relevant_articles)}/{len(article_hits)} articles (seuil={_SCORE_THRESHOLD})"
