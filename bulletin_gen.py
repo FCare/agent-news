@@ -524,7 +524,8 @@ async def generate_bulletin(articles: list[RawArticle], search_client: SearchCli
 # Question answering (ChromaDB semantic search)
 # ---------------------------------------------------------------------------
 
-_SCORE_THRESHOLD = 0.30  # minimum cosine similarity to consider a hit relevant
+_SCORE_MIN = 0.40    # absolute floor — below this, always irrelevant
+_SCORE_DELTA = 0.15  # keep only hits within this range of the best score
 
 
 def _format_topic_hits(query: str, hits: list[dict]) -> str:
@@ -568,19 +569,24 @@ async def answer_question(query: str, bulletin: dict, search_client: SearchClien
 
     # 1. Semantic search in bulletin topics (deep dives)
     topic_hits = await loop.run_in_executor(None, vector_store.search_topics, query, 10)
-    relevant_topics = [h for h in topic_hits if h["score"] >= _SCORE_THRESHOLD]
+    top_topic_score = topic_hits[0]["score"] if topic_hits else 0
+    topic_threshold = max(_SCORE_MIN, top_topic_score - _SCORE_DELTA)
+    relevant_topics = [h for h in topic_hits if h["score"] >= topic_threshold]
 
     # 2. Semantic search in raw articles
     article_hits = await loop.run_in_executor(None, vector_store.search_articles, query, 10)
-    relevant_articles = [h for h in article_hits if h["score"] >= _SCORE_THRESHOLD]
+    top_article_score = article_hits[0]["score"] if article_hits else 0
+    article_threshold = max(_SCORE_MIN, top_article_score - _SCORE_DELTA)
+    relevant_articles = [h for h in article_hits if h["score"] >= article_threshold]
 
     for h in topic_hits:
         logger.info(f"  topic  score={h['score']:.3f} : {h['metadata'].get('title','')[:80]}")
     for h in article_hits:
         logger.info(f"  article score={h['score']:.3f} : {h['metadata'].get('title','')[:80]}")
     logger.info(
-        f"ChromaDB '{query[:50]}': {len(relevant_topics)}/{len(topic_hits)} topics, "
-        f"{len(relevant_articles)}/{len(article_hits)} articles (seuil={_SCORE_THRESHOLD})"
+        f"ChromaDB '{query[:50]}': {len(relevant_topics)}/{len(topic_hits)} topics "
+        f"(seuil={topic_threshold:.2f}), "
+        f"{len(relevant_articles)}/{len(article_hits)} articles (seuil={article_threshold:.2f})"
     )
 
     # Return directly if we have relevant results — no LLM needed
