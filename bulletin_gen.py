@@ -531,11 +531,11 @@ async def answer_question(query: str, bulletin: dict, search_client: SearchClien
 
     # 1. Semantic search in bulletin topics (deep dives)
     topic_hits = await loop.run_in_executor(
-        None, vector_store.search_topics, query, 6
+        None, vector_store.search_topics, query, 10
     )
     # 2. Semantic search in raw articles
     article_hits = await loop.run_in_executor(
-        None, vector_store.search_articles, query, 6
+        None, vector_store.search_articles, query, 10
     )
 
     logger.info(
