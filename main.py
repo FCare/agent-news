@@ -264,9 +264,9 @@ async def on_user_connected(topic: str, payload) -> None:
                     f"Accepte 'category' optionnel pour filtrer sur un domaine parmi : {', '.join(bulletin_gen.CATEGORIES)}. "
                     "Si l\\'utilisateur ne précise pas de domaine, utilise toujours category='France' par défaut. "
                     "Exemples : 'quelles sont les nouvelles ?', 'quoi de neuf ?', 'les titres du jour' → category='France' ; 'les nouvelles en Europe' → category='Europe' ; 'l\\'actu tech' → category='Informatique & IA'. ; "
-                    "question → pour approfondir un sujet ou poser une question précise sur l'actu. "
-                    "Utilise 'query' pour une question libre ou 'topic' pour un titre de sujet. "
-                    "Exemples : 'dis-m\\'en plus sur le TSV Munich', 'qu\\'est-il arrivé avec l\\'AfD ?'. ; "
+                    "question → pour tout sujet, pays ou acteur précis qui ne correspond pas à une catégorie (ex: Ukraine, Russie, Trump, Gaza, ONU, grève SNCF). "
+                    "Utilise 'query' pour une question libre ou un sujet précis. "
+                    "Exemples : 'les nouvelles en Ukraine' → query='ukraine' ; 'quoi de neuf avec Trump ?' → query='trump' ; 'dis-m\\'en plus sur la grève SNCF' → query='grève SNCF'. ; "
                     "Tous les types acceptent un champ 'date' optionnel (YYYY-MM-DD) pour consulter un bulletin passé. Par défaut : aujourd'hui."
                 ),
                 "access": "write",
