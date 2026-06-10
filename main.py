@@ -340,7 +340,14 @@ async def on_user_connected(topic: str, payload) -> None:
                     category_filter = p.get("category", "").strip()
                     if category_filter:
                         result = _format_category(bulletin_row, category_filter)
-                        content = result if result is not None else _format_flash(bulletin_row, category_filter)
+                        llm = _get_llm_client()
+                        chroma = await bulletin_gen.answer_question(
+                            category_filter, bulletin_row["bulletin_json"], _search_client, llm, LLM_MODEL
+                        )
+                        if result is not None:
+                            content = result + ("\n" + chroma if chroma else "")
+                        else:
+                            content = chroma
                     else:
                         content = _format_flash(bulletin_row)
                 else:
