@@ -663,10 +663,14 @@ async def answer_question(query: str, bulletin: dict, search_client: SearchClien
     )
 
     # Return directly if we have relevant results — no LLM needed
-    if relevant_topics:
-        return _format_topic_hits(query, relevant_topics)
-    if relevant_articles:
-        return _format_article_hits(query, relevant_articles)
+    # Articles first (most recent), then topics (deeper analysis from bulletin)
+    if relevant_articles or relevant_topics:
+        parts = []
+        if relevant_articles:
+            parts.append(_format_article_hits(query, relevant_articles))
+        if relevant_topics:
+            parts.append(_format_topic_hits(query, relevant_topics))
+        return "\n".join(parts)
 
     # 3. Web search fallback (no relevant ChromaDB results)
     logger.info(f"Question '{query[:50]}' → pas de résultat ChromaDB, recherche web")
