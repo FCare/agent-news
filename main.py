@@ -330,7 +330,8 @@ async def on_user_connected(topic: str, payload) -> None:
                     else:
                         llm = _get_llm_client()
                         content = await bulletin_gen.answer_question(
-                            query, bulletin_row["bulletin_json"], _search_client, llm, LLM_MODEL
+                            query, bulletin_row["bulletin_json"], _search_client, llm, LLM_MODEL,
+                            ref_date=date_param or bulletin_row["date"],
                         )
                 else:
                     content = "Aucun bulletin disponible."
@@ -342,7 +343,8 @@ async def on_user_connected(topic: str, payload) -> None:
                         result = _format_category(bulletin_row, category_filter)
                         llm = _get_llm_client()
                         chroma = await bulletin_gen.answer_question(
-                            category_filter, bulletin_row["bulletin_json"], _search_client, llm, LLM_MODEL
+                            category_filter, bulletin_row["bulletin_json"], _search_client, llm, LLM_MODEL,
+                            ref_date=date_param or bulletin_row["date"],
                         )
                         if result is not None:
                             content = result + ("\n" + chroma if chroma else "")
