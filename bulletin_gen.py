@@ -566,21 +566,40 @@ def _format_article_hits(query: str, hits: list[dict]) -> str:
 _RECENCY_HALFLIFE_DAYS = 3.0  # score halves every 3 days
 
 
+_WINDOW_DAYS = 7          # ChromaDB pre-filter: ignore content older than this
+_RECENCY_HALFLIFE_DAYS = 3.0  # score halves every 3 days
+
+
+def _item_ts(meta: dict, ref_ts: float) -> float:
+    """Extract a Unix timestamp from a hit's metadata, with fallbacks."""
+    # Articles: crawled_ts (int) or crawled_at (ISO string)
+    ts = meta.get("crawled_ts")
+    if ts is not None:
+        return float(ts)
+    crawled_at = meta.get("crawled_at", "")
+    if crawled_at:
+        try:
+            return datetime.fromisoformat(crawled_at.replace("Z", "+00:00")).timestamp()
+        except ValueError:
+            pass
+    # Topics: date (YYYY-MM-DD)
+    date_str = meta.get("date", "")
+    if date_str:
+        try:
+            return datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp()
+        except ValueError:
+            pass
+    return ref_ts  # unknown age → treat as on-time
+
+
 def _apply_recency(hits: list[dict], ref_ts: float,
                    halflife_days: float = _RECENCY_HALFLIFE_DAYS) -> list[dict]:
     """Re-score hits: semantic * 0.7 + recency_decay * 0.3, relative to ref_ts."""
-    decay = 0.693 / (halflife_days * 86400)  # ln(2) / halflife_in_seconds
+    decay = 0.693 / (halflife_days * 86400)
     result = []
     for h in hits:
-        meta = h["metadata"]
-        ts = meta.get("crawled_ts")
-        if ts is None:
-            date_str = meta.get("date", "")
-            try:
-                ts = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp()
-            except ValueError:
-                ts = ref_ts
-        age_s = abs(ref_ts - float(ts))  # distance to reference date (past OR future)
+        ts = _item_ts(h["metadata"], ref_ts)
+        age_s = abs(ref_ts - ts)
         recency = math.exp(-decay * age_s)
         combined = h["score"] * 0.7 + recency * 0.3
         result.append({**h, "score": round(combined, 3), "score_sem": h["score"], "recency": round(recency, 3)})
@@ -595,23 +614,33 @@ async def answer_question(query: str, bulletin: dict, search_client: SearchClien
 
     loop = asyncio.get_event_loop()
 
+    from datetime import timedelta
     if ref_date:
         try:
-            ref_ts = datetime.strptime(ref_date, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp()
+            ref_dt = datetime.strptime(ref_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
         except ValueError:
-            ref_ts = datetime.now(timezone.utc).timestamp()
+            ref_dt = datetime.now(timezone.utc)
     else:
-        ref_ts = datetime.now(timezone.utc).timestamp()
+        ref_dt = datetime.now(timezone.utc)
+    ref_ts = ref_dt.timestamp()
 
-    # 1. Semantic search in bulletin topics (deep dives)
-    topic_hits = await loop.run_in_executor(None, vector_store.search_topics, query, 10)
+    # Pre-filter: only content within _WINDOW_DAYS before the reference date
+    window_start = (ref_dt - timedelta(days=_WINDOW_DAYS)).strftime("%Y-%m-%d")
+    window_start_ts = int((ref_dt - timedelta(days=_WINDOW_DAYS)).timestamp())
+
+    # 1. Semantic search in bulletin topics (deep dives) — date-filtered
+    topic_hits = await loop.run_in_executor(
+        None, vector_store.search_topics, query, 10, window_start
+    )
     topic_hits = _apply_recency(topic_hits, ref_ts)
     top_topic_score = topic_hits[0]["score"] if topic_hits else 0
     topic_threshold = max(_SCORE_MIN, top_topic_score - _SCORE_DELTA)
     relevant_topics = [h for h in topic_hits if h["score"] >= topic_threshold]
 
-    # 2. Semantic search in raw articles
-    article_hits = await loop.run_in_executor(None, vector_store.search_articles, query, 10)
+    # 2. Semantic search in raw articles — crawled_ts-filtered
+    article_hits = await loop.run_in_executor(
+        None, vector_store.search_articles, query, 10, window_start_ts
+    )
     article_hits = _apply_recency(article_hits, ref_ts)
     top_article_score = article_hits[0]["score"] if article_hits else 0
     article_threshold = max(_SCORE_MIN, top_article_score - _SCORE_DELTA)

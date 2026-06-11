@@ -207,17 +207,18 @@ def search_topics(query: str, n_results: int = 8,
         return []
 
 
-def search_articles(query: str, n_results: int = 8) -> list[dict]:
+def search_articles(query: str, n_results: int = 8,
+                    min_crawled_ts: int | None = None) -> list[dict]:
     """Semantic search in raw articles."""
     try:
         col = _articles_collection()
         count = col.count()
         if count == 0:
             return []
-        results = col.query(
-            query_texts=[query],
-            n_results=min(n_results, count),
-        )
+        kwargs = dict(query_texts=[query], n_results=min(n_results, count))
+        if min_crawled_ts is not None:
+            kwargs["where"] = {"crawled_ts": {"$gte": min_crawled_ts}}
+        results = col.query(**kwargs)
         return _format_results(results)
     except Exception as e:
         logger.error(f"ChromaDB search articles failed: {e}")
