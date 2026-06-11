@@ -618,9 +618,15 @@ async def answer_question(query: str, bulletin: dict, search_client: SearchClien
     relevant_articles = [h for h in article_hits if h["score"] >= article_threshold]
 
     for h in topic_hits:
-        logger.info(f"  topic  score={h['score']:.3f} (sem={h.get('score_sem','?'):.3f} rec={h.get('recency','?'):.3f}) : {h['metadata'].get('title','')[:60]}")
+        date = h["metadata"].get("date", "?")
+        logger.info(f"  topic  score={h['score']:.3f} (sem={h.get('score_sem','?'):.3f} rec={h.get('recency','?'):.3f}) [{date}] : {h['metadata'].get('title','')[:60]}")
     for h in article_hits:
-        logger.info(f"  article score={h['score']:.3f} (sem={h.get('score_sem','?'):.3f} rec={h.get('recency','?'):.3f}) : {h['metadata'].get('title','')[:60]}")
+        crawled = h["metadata"].get("crawled_at", h["metadata"].get("crawled_ts", "?"))
+        if isinstance(crawled, (int, float)):
+            crawled = datetime.fromtimestamp(crawled, tz=timezone.utc).strftime("%Y-%m-%d")
+        elif isinstance(crawled, str) and "T" in crawled:
+            crawled = crawled[:10]
+        logger.info(f"  article score={h['score']:.3f} (sem={h.get('score_sem','?'):.3f} rec={h.get('recency','?'):.3f}) [{crawled}] : {h['metadata'].get('title','')[:60]}")
     logger.info(
         f"ChromaDB '{query[:50]}': {len(relevant_topics)}/{len(topic_hits)} topics "
         f"(seuil={topic_threshold:.2f}), "
