@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import math
 import os
 from datetime import datetime, timezone
 
@@ -530,15 +531,16 @@ _SCORE_DELTA = 0.15  # keep only hits within this range of the best score
 
 def _format_topic_hits(query: str, hits: list[dict]) -> str:
     """Format bulletin topic hits with title + summary."""
-    date = hits[0]["metadata"].get("date", "")
-    parts = [f"[{date}] {query.upper()}", ""]
+    most_recent_date = max((h["metadata"].get("date", "") for h in hits), default="")
+    parts = [f"[{most_recent_date}] {query.upper()}", ""]
     for h in hits:
         meta = h["metadata"]
         title = meta.get("title", "")
+        date = meta.get("date", "")
         # content = "title\nsummary\ndeep_dive" — extract summary (second paragraph)
         lines = h["content"].split("\n", 2)
         summary = lines[1].strip() if len(lines) > 1 else ""
-        parts.append(f"• [{meta.get('category', '')}] {title}")
+        parts.append(f"• [{date}] [{meta.get('category', '')}] {title}")
         if summary:
             parts.append(f"  {summary}")
         parts.append("")
@@ -561,6 +563,32 @@ def _format_article_hits(query: str, hits: list[dict]) -> str:
     return "\n".join(parts)
 
 
+_RECENCY_HALFLIFE_DAYS = 3.0  # score halves every 3 days
+
+
+def _apply_recency(hits: list[dict], halflife_days: float = _RECENCY_HALFLIFE_DAYS) -> list[dict]:
+    """Re-score hits by combining semantic score with exponential recency decay."""
+    now_ts = datetime.now(timezone.utc).timestamp()
+    decay = 0.693 / (halflife_days * 86400)  # ln(2) / halflife_in_seconds
+    result = []
+    for h in hits:
+        meta = h["metadata"]
+        # Prefer crawled_ts (articles); fall back to date string (topics)
+        ts = meta.get("crawled_ts")
+        if ts is None:
+            date_str = meta.get("date", "")
+            try:
+                ts = datetime.strptime(date_str, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp()
+            except ValueError:
+                ts = now_ts
+        age_s = max(0, now_ts - float(ts))
+        recency = math.exp(-decay * age_s)
+        combined = h["score"] * 0.7 + recency * 0.3
+        result.append({**h, "score": round(combined, 3), "score_sem": h["score"], "recency": round(recency, 3)})
+    result.sort(key=lambda x: x["score"], reverse=True)
+    return result
+
+
 async def answer_question(query: str, bulletin: dict, search_client: SearchClient,
                            llm_client: openai.OpenAI, model: str) -> str:
     import vector_store
@@ -569,20 +597,22 @@ async def answer_question(query: str, bulletin: dict, search_client: SearchClien
 
     # 1. Semantic search in bulletin topics (deep dives)
     topic_hits = await loop.run_in_executor(None, vector_store.search_topics, query, 10)
+    topic_hits = _apply_recency(topic_hits)
     top_topic_score = topic_hits[0]["score"] if topic_hits else 0
     topic_threshold = max(_SCORE_MIN, top_topic_score - _SCORE_DELTA)
     relevant_topics = [h for h in topic_hits if h["score"] >= topic_threshold]
 
     # 2. Semantic search in raw articles
     article_hits = await loop.run_in_executor(None, vector_store.search_articles, query, 10)
+    article_hits = _apply_recency(article_hits)
     top_article_score = article_hits[0]["score"] if article_hits else 0
     article_threshold = max(_SCORE_MIN, top_article_score - _SCORE_DELTA)
     relevant_articles = [h for h in article_hits if h["score"] >= article_threshold]
 
     for h in topic_hits:
-        logger.info(f"  topic  score={h['score']:.3f} : {h['metadata'].get('title','')[:80]}")
+        logger.info(f"  topic  score={h['score']:.3f} (sem={h.get('score_sem','?'):.3f} rec={h.get('recency','?'):.3f}) : {h['metadata'].get('title','')[:60]}")
     for h in article_hits:
-        logger.info(f"  article score={h['score']:.3f} : {h['metadata'].get('title','')[:80]}")
+        logger.info(f"  article score={h['score']:.3f} (sem={h.get('score_sem','?'):.3f} rec={h.get('recency','?'):.3f}) : {h['metadata'].get('title','')[:60]}")
     logger.info(
         f"ChromaDB '{query[:50]}': {len(relevant_topics)}/{len(topic_hits)} topics "
         f"(seuil={topic_threshold:.2f}), "
