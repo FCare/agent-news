@@ -196,7 +196,7 @@ def search_topics(query: str, n_results: int = 8,
     """Semantic search in bulletin deep dives."""
     try:
         col = _topics_collection()
-        where = {"date": {"$gte": date_filter}} if date_filter else None
+        where = {"date_int": {"$gte": int(date_filter.replace("-", ""))}} if date_filter else None
         kwargs = dict(query_texts=[query], n_results=min(n_results, col.count()))
         if where:
             kwargs["where"] = where
