@@ -37,7 +37,7 @@ LLAMACPP_API_KEY    = os.environ["LLAMACPP_API_KEY"]
 BULLETIN_HOURS      = os.environ.get("BULLETIN_HOURS", "8,20")
 
 AGENT_NAME = "news"
-_subscribed_users: set[str] = set()
+_subscribed_sessions: set[str] = set()
 _is_generating = False
 _search_client = SearchClient()
 
@@ -227,9 +227,10 @@ async def on_user_connected(topic: str, payload) -> None:
 
     username = payload.get("username")
     password = payload.get("password")
+    session_id = payload.get("session_id")
     private_topics = payload.get("private_topics", [])
 
-    if not username or not password:
+    if not username or not password or not session_id:
         return
 
     agent_topics_topic = None
@@ -243,8 +244,8 @@ async def on_user_connected(topic: str, payload) -> None:
         logger.warning(f"[{username}] agent_topics introuvable, skip")
         return
 
-    request_topic = f"users/{username}/news/request"
-    result_topic  = f"users/{username}/news/result"
+    request_topic = f"users/{username}/{session_id}/news/request"
+    result_topic  = f"users/{username}/{session_id}/news/result"
 
     nexus = NexusClient.from_api_key(VK_URL, MQTT_HOST, SERVICE_USERNAME, SERVICE_API_KEY, MQTT_PORT)
 
@@ -298,11 +299,11 @@ async def on_user_connected(topic: str, payload) -> None:
             },
         ],
     }])
-    logger.info(f"[{username}] Topics news déclarés")
+    logger.info(f"[{username}/{session_id}] Topics news déclarés")
 
-    if username in _subscribed_users:
+    if session_id in _subscribed_sessions:
         return
-    _subscribed_users.add(username)
+    _subscribed_sessions.add(session_id)
 
     async def on_news_request(t: str, p) -> None:
         if not isinstance(p, dict):
@@ -385,7 +386,7 @@ async def on_user_connected(topic: str, payload) -> None:
 
     nexus.subscribe(request_topic, on_news_request)
     nexus.start_listening()
-    logger.info(f"[{username}] Abonné à {request_topic}")
+    logger.info(f"[{username}/{session_id}] Abonné à {request_topic}")
 
 
 # ---------------------------------------------------------------------------
