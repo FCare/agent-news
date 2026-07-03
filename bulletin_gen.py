@@ -227,7 +227,7 @@ def _llm_call(llm_client: openai.OpenAI, model: str, system: str,
     if max_tokens:
         kwargs["max_tokens"] = max_tokens
 
-    resp = llm_client.chat.completions.create(**kwargs)
+    resp = llm_client.chat.completions.create(**kwargs, timeout=120)
     calls = resp.choices[0].message.tool_calls
     if not calls:
         return {}
@@ -491,21 +491,24 @@ async def generate_bulletin(articles: list[RawArticle], search_client: SearchCli
         logger.error("Aucun sujet identifié")
         return {}
 
-    # Step 2-4: For each topic, generate queries, search, build deep dive
+    # Step 2-4: For each topic, generate queries, search, build deep dive — all in parallel.
+    # LLM calls are serialized by _LLM_SEMAPHORE; searches run fully in parallel.
     total_searches = len(topics) * SEARCH_QUERIES_PER_TOPIC
-    logger.info(f"[2/4] Enrichissement: {len(topics)} sujets × {SEARCH_QUERIES_PER_TOPIC} requêtes = {total_searches} recherches MQTT")
-    enriched_topics = []
-    for i, topic in enumerate(topics):
-        logger.info(f"  sujet [{i+1}/{len(topics)}] {topic['title']!r} ({topic['category']})")
+    logger.info(f"[2/4] Enrichissement: {len(topics)} sujets × {SEARCH_QUERIES_PER_TOPIC} requêtes = {total_searches} recherches (parallèles)")
 
+    async def _process_topic(topic: dict, i: int) -> dict:
+        logger.info(f"  sujet [{i+1}/{len(topics)}] {topic['title']!r} ({topic['category']})")
         queries = await _generate_search_queries(topic, llm_client, model)
         search_results = await search_client.search_many(queries, "news")
         n_results = sum(1 for r in search_results if r.get("report"))
         logger.info(f"  sujet [{i+1}/{len(topics)}] {n_results}/{len(queries)} résultats → deep dive en cours")
-
         deep = await _generate_deep_dive(topic, articles, search_results, llm_client, model)
-        enriched_topics.append(deep)
         logger.info(f"  sujet [{i+1}/{len(topics)}] OK")
+        return deep
+
+    enriched_topics = list(await asyncio.gather(
+        *[_process_topic(t, i) for i, t in enumerate(topics)]
+    ))
 
     logger.info(f"[2/4] Enrichissement terminé")
     logger.info(f"[3/4] Génération du flash...")

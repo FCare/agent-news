@@ -6,7 +6,9 @@ import sys
 from datetime import datetime, timezone
 
 import openai
+import uvicorn
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from fastapi import FastAPI
 from nexus_client import NexusClient
 
 import bulletin_gen
@@ -40,6 +42,30 @@ AGENT_NAME = "news"
 _subscribed_sessions: set[str] = set()
 _is_generating = False
 _search_client = SearchClient()
+
+app = FastAPI(title="agent-news")
+
+@app.post("/pipeline/run")
+async def trigger_pipeline():
+    if _is_generating:
+        return {"status": "already_running"}
+    asyncio.create_task(run_bulletin_pipeline())
+    return {"status": "started"}
+
+@app.get("/bulletin")
+async def get_bulletin(date: str | None = None):
+    row = await storage.get_bulletin_by_date(date) if date else await storage.get_latest_bulletin()
+    if not row:
+        return {"error": "Aucun bulletin disponible"}
+    b = row["bulletin_json"]
+    return {
+        "date": row["date"],
+        "headline": b.get("headline", ""),
+        "flash": b.get("flash", ""),
+        "categories": b.get("categories", {}),
+        "n_articles": row.get("n_articles"),
+        "n_topics": row.get("n_topics"),
+    }
 
 # ---------------------------------------------------------------------------
 # LLM client (shared)
@@ -342,15 +368,14 @@ async def on_user_connected(topic: str, payload) -> None:
                     category_filter = p.get("category", "").strip()
                     if category_filter:
                         result = _format_category(bulletin_row, category_filter)
-                        llm = _get_llm_client()
-                        chroma = await bulletin_gen.answer_question(
-                            category_filter, bulletin_row["bulletin_json"], _search_client, llm, LLM_MODEL,
-                            ref_date=date_param or bulletin_row["date"],
-                        )
                         if result is not None:
-                            content = result + ("\n" + chroma if chroma else "")
+                            content = result
                         else:
-                            content = chroma
+                            llm = _get_llm_client()
+                            content = await bulletin_gen.answer_question(
+                                category_filter, bulletin_row["bulletin_json"], _search_client, llm, LLM_MODEL,
+                                ref_date=date_param or bulletin_row["date"],
+                            )
                     else:
                         content = _format_flash(bulletin_row)
                 else:
@@ -377,8 +402,9 @@ async def on_user_connected(topic: str, payload) -> None:
         else:
             content = f"Type inconnu: {req_type}. Disponibles: news_fetch, source."
 
+        reply_to = p.get("reply_to", result_topic)
         logger.info(f"[{username}] Réponse ({len(content)} chars):\n{content}")
-        await nexus.publish(result_topic, {
+        await nexus.publish(reply_to, {
             "type": req_type,
             "content": content,
             "bulletin_date": bulletin_row["date"] if bulletin_row else "",
@@ -430,7 +456,9 @@ async def main() -> None:
         logger.info("Aucun bulletin pour aujourd'hui, lancement du pipeline...")
         asyncio.create_task(run_bulletin_pipeline())
 
-    await asyncio.Event().wait()
+    config = uvicorn.Config(app, host="0.0.0.0", port=8080, log_level="warning")
+    server = uvicorn.Server(config)
+    await server.serve()
 
 
 if __name__ == "__main__":
