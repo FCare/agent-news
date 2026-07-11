@@ -9,65 +9,111 @@ Three collections:
 
 import hashlib
 import logging
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
 CHROMA_PATH = Path("/data/chroma")
-# Multilingual model — good for FR/EN mixed news content (~470 MB, cached after first run)
-EMBEDDING_MODEL = "paraphrase-multilingual-MiniLM-L12-v2"
+# Multilingual model — good for FR/EN mixed news content (~2.2 GB, cached after first run)
+EMBEDDING_MODEL = "BAAI/bge-m3"
 
 _client = None
 _articles_col = None
 _topics_col = None
 _publishers_col = None
+# Le backfill au démarrage tourne en tâche de fond pendant que d'autres appels
+# (seed_publishers_if_empty, etc.) peuvent initialiser ces singletons depuis un
+# autre thread d'executor — sans verrou, deux threads créent le client/une
+# collection en même temps et corrompent l'objet Rust sous-jacent.
+_init_lock = threading.RLock()
 
 
 def _get_client():
     global _client
     if _client is None:
-        import chromadb
-        CHROMA_PATH.mkdir(parents=True, exist_ok=True)
-        _client = chromadb.PersistentClient(path=str(CHROMA_PATH))
+        with _init_lock:
+            if _client is None:
+                import chromadb
+                CHROMA_PATH.mkdir(parents=True, exist_ok=True)
+                _client = chromadb.PersistentClient(path=str(CHROMA_PATH))
     return _client
 
 
 def _get_ef():
+    import torch
     from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
-    return SentenceTransformerEmbeddingFunction(model_name=EMBEDDING_MODEL)
+    if torch.cuda.is_available():
+        try:
+            # dtype en string ("float16"), pas l'objet torch.dtype — Chroma sérialise
+            # en JSON la config de l'embedding function pour la persister dans la collection.
+            return SentenceTransformerEmbeddingFunction(
+                model_name=EMBEDDING_MODEL, device="cuda",
+                model_kwargs={"torch_dtype": "float16"},
+            )
+        except Exception as e:
+            logger.warning(f"Chargement du modèle sur GPU échoué ({e}), repli CPU")
+    return SentenceTransformerEmbeddingFunction(model_name=EMBEDDING_MODEL, device="cpu")
+
+
+def unload_model() -> None:
+    """Libère le modèle d'embedding et la VRAM associée entre deux cycles de
+    génération de bulletin. Rechargé automatiquement (lazy) au prochain accès
+    à une collection — pas d'action nécessaire côté appelant."""
+    global _client, _articles_col, _topics_col, _publishers_col
+    with _init_lock:
+        _client = None
+        _articles_col = None
+        _topics_col = None
+        _publishers_col = None
+    try:
+        import gc
+        import torch
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        logger.info("ChromaDB: modèle d'embedding déchargé")
+    except Exception as e:
+        logger.error(f"Déchargement du modèle échoué: {e}")
 
 
 def _articles_collection():
     global _articles_col
     if _articles_col is None:
-        _articles_col = _get_client().get_or_create_collection(
-            name="articles",
-            embedding_function=_get_ef(),
-            metadata={"hnsw:space": "cosine"},
-        )
+        with _init_lock:
+            if _articles_col is None:
+                _articles_col = _get_client().get_or_create_collection(
+                    name="articles",
+                    embedding_function=_get_ef(),
+                    metadata={"hnsw:space": "cosine"},
+                )
     return _articles_col
 
 
 def _topics_collection():
     global _topics_col
     if _topics_col is None:
-        _topics_col = _get_client().get_or_create_collection(
-            name="bulletin_topics",
-            embedding_function=_get_ef(),
-            metadata={"hnsw:space": "cosine"},
-        )
+        with _init_lock:
+            if _topics_col is None:
+                _topics_col = _get_client().get_or_create_collection(
+                    name="bulletin_topics",
+                    embedding_function=_get_ef(),
+                    metadata={"hnsw:space": "cosine"},
+                )
     return _topics_col
 
 
 def _publishers_collection():
     global _publishers_col
     if _publishers_col is None:
-        _publishers_col = _get_client().get_or_create_collection(
-            name="publishers",
-            embedding_function=_get_ef(),
-            metadata={"hnsw:space": "cosine"},
-        )
+        with _init_lock:
+            if _publishers_col is None:
+                _publishers_col = _get_client().get_or_create_collection(
+                    name="publishers",
+                    embedding_function=_get_ef(),
+                    metadata={"hnsw:space": "cosine"},
+                )
     return _publishers_col
 
 
@@ -133,10 +179,19 @@ def upsert_publishers(articles: list[dict]) -> None:
         logger.error(f"ChromaDB upsert publishers failed: {e}")
 
 
+def _collection_count(name: str) -> int:
+    """Compte les entrées d'une collection sans construire l'embedding function —
+    .count() n'a besoin d'aucun modèle, seulement upsert/query en ont besoin."""
+    try:
+        return _get_client().get_collection(name=name, embedding_function=None).count()
+    except Exception:
+        return 0  # collection pas encore créée
+
+
 def seed_publishers_if_empty(articles: list[dict]) -> None:
     """Populate the publishers collection from existing articles if it is empty."""
     try:
-        if _publishers_collection().count() == 0:
+        if _collection_count("publishers") == 0:
             upsert_publishers(articles)
             logger.info(f"ChromaDB: publishers seedés depuis {len(articles)} articles existants")
     except Exception as e:

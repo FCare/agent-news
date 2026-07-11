@@ -151,6 +151,11 @@ async def run_bulletin_pipeline() -> None:
         logger.exception(f"Erreur pipeline: {e}")
     finally:
         _is_generating = False
+        # Le modèle d'embedding n'est utile que le temps du pipeline (crawl +
+        # sauvegarde du bulletin) — le décharger libère la VRAM jusqu'au prochain
+        # cycle (rechargement automatique et transparent au prochain accès).
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, vector_store.unload_model)
 
 # ---------------------------------------------------------------------------
 # Response formatting
@@ -203,23 +208,29 @@ def _format_publisher(articles: list[dict], publisher: str) -> str:
     return "\n".join(parts)
 
 
+# En dessous de ce score de similarité cosinus, on considère qu'aucun sujet du
+# bulletin ne correspond réellement à la question — mieux vaut laisser la main
+# à answer_question (recherche sémantique + LLM) que de renvoyer un sujet
+# vaguement proche mais hors-sujet.
+_DEEP_DIVE_MIN_SCORE = 0.35
+
+
 def _format_deep_dive(bulletin_row: dict, topic_query: str) -> str:
     b = bulletin_row["bulletin_json"]
     date = bulletin_row["date"]
 
-    best: dict | None = None
-    best_score = -1
-    query_lower = topic_query.lower()
+    hits = [h for h in vector_store.search_topics(topic_query, n_results=5)
+            if h["metadata"].get("date") == date]
+    if not hits or hits[0]["score"] < _DEEP_DIVE_MIN_SCORE:
+        return None
 
-    for stories in b.get("categories", {}).values():
-        for story in stories:
-            title_lower = story["title"].lower()
-            score = sum(1 for word in query_lower.split() if word in title_lower)
-            if score > best_score:
-                best_score = score
-                best = story
-
-    if not best or best_score == 0:
+    best_title = hits[0]["metadata"]["title"]
+    best = next(
+        (story for stories in b.get("categories", {}).values() for story in stories
+         if story["title"] == best_title),
+        None,
+    )
+    if not best:
         return None
 
     date_range = best.get("date_range", "")
@@ -445,12 +456,12 @@ async def main() -> None:
     scheduler.start()
 
     # Initial run — skip if a bulletin already exists for today
-    loop = asyncio.get_event_loop()
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     existing = await storage.get_bulletin_by_date(today)
     if existing:
         logger.info(f"Bulletin du {today} déjà présent, pipeline ignoré au démarrage.")
         articles = await storage.get_recent_articles()
+        loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, vector_store.seed_publishers_if_empty, articles)
     else:
         logger.info("Aucun bulletin pour aujourd'hui, lancement du pipeline...")

@@ -499,7 +499,7 @@ async def generate_bulletin(articles: list[RawArticle], search_client: SearchCli
     async def _process_topic(topic: dict, i: int) -> dict:
         logger.info(f"  sujet [{i+1}/{len(topics)}] {topic['title']!r} ({topic['category']})")
         queries = await _generate_search_queries(topic, llm_client, model)
-        search_results = await search_client.search_many(queries, "news")
+        search_results = await search_client.search_many(queries, "news", allow_tavily=False)
         n_results = sum(1 for r in search_results if r.get("report"))
         logger.info(f"  sujet [{i+1}/{len(topics)}] {n_results}/{len(queries)} résultats → deep dive en cours")
         deep = await _generate_deep_dive(topic, articles, search_results, llm_client, model)

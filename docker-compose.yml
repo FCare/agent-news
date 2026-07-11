@@ -14,6 +14,13 @@ services:
     volumes:
       - news-data:/data
       - hf-cache:/root/.cache/huggingface
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              device_ids: ['0']
+              capabilities: [gpu]
     restart: unless-stopped
     logging:
       driver: json-file

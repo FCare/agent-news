@@ -27,14 +27,15 @@ class SearchClient:
         logger.info(f"SearchClient prêt — topic: {SERVICE_REQUEST_TOPIC}")
 
     async def search(self, query: str, categories: str = "news",
-                     detail_level: int = 3) -> dict:
+                     detail_level: int = 3, allow_tavily: bool = True) -> dict:
         if self._nexus is None:
             return {"report": "", "sources": [], "topic": query[:60]}
 
         async with self._sem:
             result = await self._nexus.request(
                 SERVICE_REQUEST_TOPIC,
-                {"query": query, "categories": categories, "n_results": 10, "detail_level": detail_level},
+                {"query": query, "categories": categories, "n_results": 10,
+                 "detail_level": detail_level, "allow_tavily": allow_tavily},
                 timeout=SEARCH_TIMEOUT,
             )
         if result is None:
@@ -43,10 +44,10 @@ class SearchClient:
         return result
 
     async def search_many(self, queries: list[str],
-                          categories: str = "news") -> list[dict]:
+                          categories: str = "news", allow_tavily: bool = True) -> list[dict]:
         async def _one(query: str, i: int) -> dict:
             logger.info(f"    recherche [{i+1}/{len(queries)}] → {query[:70]!r}")
-            r = await self.search(query, categories)
+            r = await self.search(query, categories, allow_tavily=allow_tavily)
             logger.info(f"    recherche [{i+1}/{len(queries)}] ← {len(r.get('report') or '')} chars")
             return r
 
