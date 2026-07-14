@@ -294,32 +294,26 @@ async def on_user_connected(topic: str, payload) -> None:
             {
                 "topic": request_topic,
                 "description": (
-                    "Source EXCLUSIVE d'actualités en temps réel. "
-                    "OBLIGATOIRE pour toute question sur l'actualité, les nouvelles, les événements récents. "
-                    "Deux types disponibles : "
-                    "news_fetch → pour toute demande d\\'actualité. "
-                    "Sans 'query' : retourne le flash du jour (titres des sujets). "
-                    "Avec 'query' : répond à une question sur un sujet, pays, personne ou événement précis. "
-                    "query = sujet/entité uniquement, SANS référence temporelle (la date est automatique). "
-                    f"Accepte 'category' optionnel parmi : {', '.join(bulletin_gen.CATEGORIES)} — seulement si PAS de query. "
-                    "Si l\\'utilisateur ne précise pas de domaine pour le flash, utilise category='France'. "
-                    "Exemples : "
-                    "'les nouvelles ?' → news_fetch/category='France' ; "
-                    "'l\\'actu tech' → news_fetch/category='Informatique & IA' ; "
-                    "'les nouvelles en Ukraine' → news_fetch/query='ukraine' ; "
-                    "'la nuit dernière en Ukraine' → news_fetch/query='ukraine' ; "
-                    "'quoi de neuf avec Trump ?' → news_fetch/query='trump'. ; "
-                    "source → UNIQUEMENT si l\\'utilisateur cite explicitement un média par son nom "
-                    "(ex: 'les nouvelles de Korben', 'les articles de 01net'). "
-                    "Utilise 'publisher' avec le nom exact du média tel qu\\'il apparaît dans la liste. "
-                    "Tous les types acceptent 'date' optionnel (YYYY-MM-DD) pour un bulletin passé."
+                    "Source EXCLUSIVE d'actualités en temps réel. OBLIGATOIRE pour toute "
+                    "question sur l'actualité, les nouvelles, les événements récents. "
+                    "news_fetch → sans 'query' : flash du jour (titres) ; avec 'query' "
+                    "(sujet/entité SANS référence temporelle, la date est automatique) : "
+                    "répond sur un sujet/pays/personne/événement précis. 'category' optionnel "
+                    f"(seulement si pas de query) parmi : {', '.join(bulletin_gen.CATEGORIES)} "
+                    "— défaut 'France' si le domaine du flash n'est pas précisé. Ex: "
+                    "'l\\'actu tech' → category='Informatique & IA' ; 'quoi de neuf avec Trump ?' "
+                    "→ query='trump'. "
+                    "source → UNIQUEMENT si un média est cité explicitement par son nom (ex: "
+                    "'les nouvelles de Korben') ; 'publisher' = nom exact tel qu\\'il apparaît "
+                    "dans la liste. "
+                    "Tous types acceptent 'date' optionnel (YYYY-MM-DD) pour un bulletin passé."
                 ),
                 "access": "write",
                 "response_topic": result_topic,
                 "format": {
                     "type": "news_fetch | source",
                     "query": "(optionnel) sujet/entité pour news_fetch, ex: 'ukraine', 'trump'",
-                    "category": f"(optionnel, news_fetch sans query) ex: {', '.join(bulletin_gen.CATEGORIES[:4])}...",
+                    "category": "(optionnel, news_fetch sans query) voir description pour la liste",
                     "publisher": "(source uniquement) " + str(publishers),
                     "date": "(optionnel) YYYY-MM-DD, défaut=aujourd'hui",
                 },
