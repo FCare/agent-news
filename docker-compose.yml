@@ -14,6 +14,7 @@ services:
     volumes:
       - news-data:/data
       - hf-cache:/root/.cache/huggingface
+      - wiki-data:/wiki
     deploy:
       resources:
         reservations:
@@ -31,3 +32,4 @@ services:
 volumes:
   news-data:
   hf-cache:
+  wiki-data:

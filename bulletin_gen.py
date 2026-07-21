@@ -82,18 +82,29 @@ _DEEP_DIVE_TOOL = [{
         "parameters": {
             "type": "object",
             "properties": {
+                "category": {
+                    "type": "string",
+                    "enum": CATEGORIES,
+                    "description": (
+                        "Catégorie la plus appropriée pour CE sujet précis, choisie à partir "
+                        "de son titre et de son contenu réel — pas une catégorie générique par "
+                        "défaut. Ex: un sujet sur la guerre en Ukraine est 'Géopolitique & "
+                        "Défense', pas 'Informatique & IA'."
+                    ),
+                },
                 "title_fr": {
                     "type": "string",
                     "description": (
-                        "Titre du sujet en français, court et accrocheur. "
-                        "Traduis si nécessaire depuis l'anglais ou l'allemand."
+                        "Titre du sujet TOUJOURS EN FRANÇAIS, court et accrocheur, même si "
+                        "toutes les sources sont en anglais ou dans une autre langue — traduis, "
+                        "ne recopie jamais un titre source tel quel."
                     )
                 },
                 "summary": {
                     "type": "string",
                     "description": (
                         "Résumé factuel en 3-5 phrases, style JT 20h. "
-                        "Faits précis, chiffres si disponibles, ton oral. En français."
+                        "Faits précis, chiffres si disponibles, ton oral. TOUJOURS EN FRANÇAIS."
                     )
                 },
                 "deep_dive": {
@@ -101,20 +112,16 @@ _DEEP_DIVE_TOOL = [{
                     "description": (
                         "Analyse approfondie: contexte historique, enjeux stratégiques, "
                         "chiffres clés, perspectives EU et US, déclarations importantes, "
-                        "conséquences potentielles. Ton oral sérieux, 6-10 phrases, sans liste."
+                        "conséquences potentielles. Ton oral sérieux, 6-10 phrases, sans liste. "
+                        "TOUJOURS EN FRANÇAIS."
                     )
                 },
                 "what_to_watch": {
                     "type": "string",
-                    "description": "Ce qu'il faut surveiller / prochaines étapes. 1-2 phrases."
-                },
-                "sources": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Noms des médias sources (max 6)"
+                    "description": "Ce qu'il faut surveiller / prochaines étapes. 1-2 phrases. TOUJOURS EN FRANÇAIS."
                 },
             },
-            "required": ["title_fr", "summary", "deep_dive", "what_to_watch", "sources"],
+            "required": ["category", "title_fr", "summary", "deep_dive", "what_to_watch"],
         }
     }
 }]
@@ -140,6 +147,42 @@ _FLASH_TOOL = [{
                 },
             },
             "required": ["headline", "flash"],
+        }
+    }
+}]
+
+_CATEGORY_SUMMARY_TOOL = [{
+    "type": "function",
+    "function": {
+        "name": "generate_category_summaries",
+        "description": (
+            "Génère, pour chaque catégorie fournie, un court bulletin de synthèse "
+            "couvrant l'ENSEMBLE des sujets listés pour cette catégorie ce jour-là "
+            "(pas un résumé par sujet — une synthèse globale de la catégorie)."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "summaries": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "category": {"type": "string", "description": "Nom exact de la catégorie, tel que fourni."},
+                            "summary": {
+                                "type": "string",
+                                "description": (
+                                    "2-4 phrases, style bulletin radio, synthétisant l'ensemble des "
+                                    "sujets de cette catégorie pour la journée — pas une liste, un "
+                                    "texte suivi. TOUJOURS EN FRANÇAIS."
+                                ),
+                            },
+                        },
+                        "required": ["category", "summary"],
+                    },
+                },
+            },
+            "required": ["summaries"],
         }
     }
 }]
@@ -387,7 +430,11 @@ async def _generate_deep_dive(topic: dict, articles: list[RawArticle],
 
     user_content = (
         f"SUJET: {topic['title']}\n"
-        f"CATÉGORIE: {topic['category']}\n"
+        # Pas de "CATÉGORIE: ..." ici : topic['category'] vient d'un classifieur par
+        # mots-clés (clustering.py::_assign_category) peu fiable — l'afficher comme un
+        # fait biaisait le LLM à le recopier au lieu de déterminer la vraie catégorie
+        # (voir le champ "category" de generate_analysis, calculé à partir du contenu
+        # réel ci-dessous).
         + (f"PÉRIODE DES SOURCES: {date_range}\n" if date_range else "")
         + f"\n=== EXTRAITS D'ARTICLES ({len(article_excerpts)}) ===\n{articles_block}\n\n"
         f"=== RÉSULTATS DE RECHERCHE ({len(search_excerpts)}) ===\n{searches_block}"
@@ -399,8 +446,11 @@ async def _generate_deep_dive(topic: dict, articles: list[RawArticle],
         system=(
             "Tu es un expert journaliste du Monde diplomatique. Tu reçois des extraits d'articles "
             "et des résultats de recherches approfondies sur un sujet d'actualité. "
-            "Rédige une analyse complète en français: faits précis avec chiffres, contexte historique, "
-            "enjeux, perspectives EU et US, ce qu'il faut retenir. "
+            "Détermine d'abord la catégorie la plus appropriée pour CE sujet parmi la liste donnée. "
+            "Rédige ensuite une analyse complète, INTÉGRALEMENT EN FRANÇAIS même si les extraits "
+            "d'articles et résultats de recherche fournis sont en anglais ou dans une autre langue "
+            "(traduis, ne recopie jamais un texte source tel quel) : faits précis avec chiffres, "
+            "contexte historique, enjeux, perspectives EU et US, ce qu'il faut retenir. "
             "Ton oral, sérieux, factuel, sans liste ni tirets. "
             "Appelle generate_analysis."
         ),
@@ -409,20 +459,40 @@ async def _generate_deep_dive(topic: dict, articles: list[RawArticle],
     )
 
     title_fr  = result.get("title_fr",      topic["title"])
+    category  = result.get("category",      topic["category"])
+    if category not in CATEGORIES:
+        # Constaté sur données réelles : le LLM peut renvoyer une catégorie hors de
+        # l'enum du schéma malgré la contrainte (ex: "Santé & Environnement", fusion
+        # halluciné de deux catégories valides distinctes) — l'enum JSON schema n'est
+        # apparemment pas strictement appliqué par ce backend.
+        logger.warning(f"  catégorie hors liste reçue du LLM: {category!r} -> repli sur {topic['category']!r}")
+        category = topic["category"] if topic["category"] in CATEGORIES else "International"
     summary   = result.get("summary",       topic["title"])
     deep_dive = result.get("deep_dive",     "")
     watch     = result.get("what_to_watch", "")
-    sources   = result.get("sources",       [])
+    # Construites depuis les vrais articles appariés (`matched`), PAS devinées par le
+    # LLM (l'ancien champ "sources" du tool ne donnait que des noms de médias, jamais
+    # d'URL, et le LLM ne voit de toute façon jamais les URLs sources dans son prompt
+    # — voir article_excerpts ci-dessus, qui n'inclut que publisher+titre+date).
+    seen_urls: set[str] = set()
+    sources = []
+    for a in matched:
+        if a.url in seen_urls:
+            continue
+        seen_urls.add(a.url)
+        sources.append({"name": a.publisher, "url": a.url})
     logger.info(f"  titre_fr : {title_fr}")
+    if category != topic["category"]:
+        logger.info(f"  catégorie: {topic['category']} -> {category} (corrigée par le LLM)")
     logger.info(f"  résumé   : {summary}")
     logger.info(f"  analyse  : {deep_dive[:200]}{'…' if len(deep_dive) > 200 else ''}")
     if watch:
         logger.info(f"  à suivre : {watch}")
     if sources:
-        logger.info(f"  sources  : {', '.join(sources)}")
+        logger.info(f"  sources  : {', '.join(s['name'] for s in sources)}")
     return {
         "title":        title_fr,
-        "category":     topic["category"],
+        "category":     category,
         "importance":   topic.get("importance", 5),
         "date_range":   date_range,
         "summary":      summary,
@@ -460,7 +530,8 @@ async def _generate_flash(topics: list[dict],
     return headline, flash
 
 
-def _assemble_bulletin(flash: str, headline: str, topics: list[dict]) -> dict:
+def _assemble_bulletin(flash: str, headline: str, topics: list[dict],
+                        category_summaries: dict[str, str] | None = None) -> dict:
     categories: dict[str, list[dict]] = {c: [] for c in CATEGORIES}
     for t in topics:
         cat = t.get("category", "International")
@@ -473,7 +544,37 @@ def _assemble_bulletin(flash: str, headline: str, topics: list[dict]) -> dict:
         "flash": flash,
         "headline": headline,
         "categories": categories,
+        "category_summaries": category_summaries or {},
     }
+
+
+async def _generate_category_summaries(categories: dict[str, list[dict]],
+                                        llm_client: openai.OpenAI, model: str) -> dict[str, str]:
+    """Un bulletin de synthèse par catégorie (pas par sujet) — ex: pour 'International'
+    avec 5 sujets aujourd'hui, un paragraphe qui les résume ENSEMBLE, affiché sur la
+    page wiki dates/<date>.md entre le titre de la catégorie et la liste des sujets."""
+    if not categories:
+        return {}
+    blocks = []
+    for cat, stories in categories.items():
+        stories_text = "\n".join(f"- {s['title']}: {s.get('summary', '')[:200]}" for s in stories)
+        blocks.append(f"### {cat} ({len(stories)} sujet(s))\n{stories_text}")
+    user_content = "\n\n".join(blocks)
+
+    logger.info(f"  → appel LLM synthèses par catégorie ({len(categories)} catégories)...")
+    result = await _llm(
+        llm_client, model,
+        system=(
+            "Tu rédiges un bulletin de synthèse pour chaque catégorie d'actualité donnée, à "
+            "partir de la liste de ses sujets du jour. Un paragraphe par catégorie, qui couvre "
+            "l'ensemble des sujets listés — pas un résumé sujet par sujet, une synthèse "
+            "d'ensemble façon flash radio. Style factuel et direct, sans formule d'introduction. "
+            "Appelle generate_category_summaries avec une entrée par catégorie fournie."
+        ),
+        user=user_content,
+        tool=_CATEGORY_SUMMARY_TOOL,
+    )
+    return {s["category"]: s["summary"] for s in result.get("summaries", []) if s.get("category") and s.get("summary")}
 
 
 # ---------------------------------------------------------------------------
@@ -515,8 +616,12 @@ async def generate_bulletin(articles: list[RawArticle], search_client: SearchCli
     # Step 5: Flash
     headline, flash = await _generate_flash(enriched_topics, llm_client, model)
 
-    # Step 6: Assemble
+    # Step 6: Assemble (catégories d'abord, la synthèse par catégorie en a besoin)
     bulletin = _assemble_bulletin(flash, headline, enriched_topics)
+    logger.info(f"[3/4] Génération des synthèses par catégorie...")
+    bulletin["category_summaries"] = await _generate_category_summaries(
+        bulletin["categories"], llm_client, model
+    )
     logger.info(
         f"Bulletin généré: {sum(len(v) for v in bulletin['categories'].values())} sujets "
         f"en {len(bulletin['categories'])} catégories"

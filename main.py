@@ -9,11 +9,16 @@ import openai
 import uvicorn
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from nexus_client import NexusClient
 
 import bulletin_gen
 import storage
+import subject_consolidation
 import vector_store
+import wiki_api
+import wiki_build
 from crawler import crawl_articles
 from search_client import SearchClient
 
@@ -44,6 +49,25 @@ _is_generating = False
 _search_client = SearchClient()
 
 app = FastAPI(title="agent-news")
+app.include_router(wiki_api.router)
+if wiki_build.WIKI_SITE_DIR.is_dir():
+    # Monté seulement si le site a déjà été généré au moins une fois (sinon
+    # StaticFiles refuse de démarrer, faisant planter tout l'agent au boot) —
+    # voir wiki_build.run(), appelé en fin de run_bulletin_pipeline ou
+    # manuellement via `python3 wiki_build.py`.
+    app.mount("/wiki", StaticFiles(directory=wiki_build.WIKI_SITE_DIR, html=True), name="wiki")
+else:
+    logger.warning(
+        f"Wiki pas encore généré ({wiki_build.WIKI_SITE_DIR} introuvable) — "
+        "/wiki indisponible tant que wiki_build.run() n'a pas tourné au moins une fois"
+    )
+
+@app.get("/")
+async def root():
+    # Le site généré vit sous /wiki (voir le mount StaticFiles ci-dessus) — sans
+    # cette redirection, news.caronboulme.fr/ (ce que tape naturellement un
+    # utilisateur) renvoie 404, seul /wiki/ répond.
+    return RedirectResponse(url="/wiki/")
 
 @app.post("/pipeline/run")
 async def trigger_pipeline():
@@ -109,6 +133,14 @@ async def run_bulletin_pipeline() -> None:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, vector_store.upsert_articles, rows)
         await loop.run_in_executor(None, vector_store.upsert_publishers, rows)
+        # Déchargé dès maintenant plutôt qu'en fin de pipeline seulement : c'est la
+        # seule étape qui a vraiment besoin du modèle d'embedding chargé en continu
+        # (upsert de ~1800 articles) — les ~35-40 min d'enrichissement LLM qui
+        # suivent n'y touchent pas, sauf la consolidation (subject_consolidation.py,
+        # requêtes courtes) qui le rechargera à la volée si besoin (lazy, voir
+        # unload_model). Libère la VRAM pendant cette longue fenêtre pour d'autres
+        # services GPU partagés (voir run_pipeline_with_gpu.sh).
+        await loop.run_in_executor(None, vector_store.unload_model)
 
         # 3. Generate bulletin
         logger.info("[2/4] Clustering et identification des sujets...")
@@ -118,9 +150,20 @@ async def run_bulletin_pipeline() -> None:
             logger.error("[2/4] Bulletin vide, pipeline annulé")
             return
 
+        # 3bis. Consolidation des sujets (voir subject_consolidation.py) — AVANT la
+        # sauvegarde du bulletin brut, mais un échec ici ne doit jamais empêcher cette
+        # sauvegarde (le bulletin du jour reste la donnée de référence, la vue
+        # consolidée est dérivée et peut être rejouée plus tard si besoin, voir
+        # backfill_subjects.py).
+        logger.info("[2b/4] Consolidation des sujets...")
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        try:
+            await subject_consolidation.consolidate_bulletin(bulletin, today, llm, LLM_MODEL)
+        except Exception as e:
+            logger.error(f"[2b/4] Consolidation des sujets échouée: {e}")
+
         # 4. Save (SQLite + ChromaDB) — only if bulletin is valid
         logger.info("[3/4] Sauvegarde du bulletin...")
-        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         n_topics = sum(len(v) for v in bulletin.get("categories", {}).values())
         has_flash = bool(bulletin.get("flash", "").strip())
         has_headline = bulletin.get("headline", "") not in ("", "L'actualité du jour")
@@ -144,6 +187,21 @@ async def run_bulletin_pipeline() -> None:
         await storage.purge_old_data()
         await loop.run_in_executor(None, vector_store.purge_old_articles)
         await loop.run_in_executor(None, vector_store.purge_old_topics)
+        # Rétention distincte et bien plus longue (voir storage.SUBJECT_RETENTION_DAYS) :
+        # un sujet actif survit tant qu'il est réactualisé, indépendamment des 90 jours
+        # de purge_old_data sur les bulletins bruts.
+        await storage.purge_old_subjects()
+        await loop.run_in_executor(None, vector_store.purge_old_subjects)
+
+        # 6. Régénération du wiki (voir wiki_build.py) — un échec ici ne doit jamais
+        # faire échouer le pipeline (bulletin déjà sauvegardé indépendamment) ; le
+        # wiki reste simplement à sa dernière version générée avec succès.
+        logger.info("Régénération du wiki...")
+        try:
+            wiki_result = await wiki_build.run()
+            logger.info(f"Wiki régénéré: {wiki_result}")
+        except Exception as e:
+            logger.error(f"Régénération du wiki échouée: {e}")
 
         logger.info(f"=== Pipeline terminé: {n_topics} sujets pour le {today} ===")
 
@@ -249,7 +307,11 @@ def _format_deep_dive(bulletin_row: dict, topic_query: str) -> str:
     if best.get("what_to_watch"):
         parts += ["── À SUIVRE ──", "", best["what_to_watch"], ""]
     if best.get("sources"):
-        parts.append(f"Sources: {', '.join(best['sources'])}")
+        # sources = [{"name": ..., "url": ...}] (voir bulletin_gen.py::_generate_deep_dive)
+        # depuis la migration ; les anciens bulletins peuvent encore contenir de
+        # simples chaînes (noms de médias sans URL) — les deux formes sont acceptées.
+        names = [s["name"] if isinstance(s, dict) else s for s in best["sources"]]
+        parts.append(f"Sources: {', '.join(names)}")
 
     return "\n".join(parts)
 
@@ -338,10 +400,24 @@ async def on_user_connected(topic: str, payload) -> None:
 
     async def on_news_request(t: str, p) -> None:
         if not isinstance(p, dict):
+            logger.warning(f"[{username}] Payload news invalide (non-dict): {p!r}")
+            await nexus.publish(result_topic, {"error": "Invalid request payload: expected a JSON object"})
             return
+
+        reply_to = p.get("reply_to", result_topic)
         req_type = p.get("type", "news_fetch").lower()
         logger.info(f"[{username}] Requête news: {p}")
 
+        try:
+            await _handle_news_request(p, req_type, reply_to)
+        except Exception as e:
+            logger.exception(f"[{username}] Erreur traitement requête news: {e}")
+            await nexus.publish(reply_to, {
+                "type": req_type,
+                "error": f"Internal error while processing the request: {e}",
+            })
+
+    async def _handle_news_request(p: dict, req_type: str, reply_to: str) -> None:
         date_param = p.get("date", "").strip()
         if date_param:
             bulletin_row = await storage.get_bulletin_by_date(date_param)
@@ -407,7 +483,6 @@ async def on_user_connected(topic: str, payload) -> None:
         else:
             content = f"Type inconnu: {req_type}. Disponibles: news_fetch, source."
 
-        reply_to = p.get("reply_to", result_topic)
         logger.info(f"[{username}] Réponse ({len(content)} chars):\n{content}")
         await nexus.publish(reply_to, {
             "type": req_type,

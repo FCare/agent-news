@@ -1,0 +1,10 @@
+/* Material a déjà un mécanisme scroll-margin-top intégré, mais insuffisant par
+   défaut (.md-typeset :target { --md-scroll-margin: 3.6rem; ... }, voir
+   main.*.min.css) : un lien vers une ancre (ex: #edition-2026-07-15) atterrit sous
+   le header sticky. On surcharge la variable plutôt que scroll-margin-top
+   directement — même sélecteur que Material (.md-typeset :target, spécificité
+   égale), sinon un sélecteur plus simple comme "h3[id]" perd face au sien (constaté
+   côté contes-agent). */
+.md-typeset :target {
+  --md-scroll-margin: 10rem;
+}

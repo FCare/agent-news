@@ -1,0 +1,54 @@
+site_name: Actualités — Wiki
+site_description: Sujets d'actualité consolidés au fil du temps, recherche sémantique
+docs_dir: /wiki/src
+site_dir: /wiki/site
+
+theme:
+  name: material
+  language: fr
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+  features:
+    - navigation.indexes
+    - navigation.top
+    - content.code.copy
+    - search.suggest
+
+# Ordre explicite plutôt que la dérivation auto — aligné sur "Explorer par..." de
+# l'accueil (voir wiki_build.py::_render_index_page). Ne liste que les pages
+# d'index de chaque section : les fiches individuelles (sujet, date, source)
+# restent atteignables par lien sans encombrer le menu latéral.
+nav:
+  - Accueil: index.md
+  - Tous les sujets: sujets/index.md
+  - Catégories: categories/index.md
+  - Dates: dates/index.md
+  - Sources: publishers/index.md
+
+# Sans ça, MkDocs logue une alerte listant individuellement chaque fiche sujet/
+# date/catégorie/source à chaque génération — attendu par construction (nav
+# volontairement limité aux pages d'index ci-dessus).
+not_in_nav: |
+  sujets/*.md
+  categories/*.md
+  dates/*.md
+  publishers/*.md
+
+extra_css:
+  - assets/style.css
+
+extra_javascript:
+  - assets/search.js
+
+markdown_extensions:
+  - attr_list
+  - md_in_html
+  - pymdownx.details
+  - pymdownx.superfences
+
+# docs_dir/site_dir ci-dessus sont les défauts (utiles pour `mkdocs serve` en
+# local) — wiki_build.py les surcharge explicitement via WIKI_SRC_DIR/
+# WIKI_SITE_DIR à chaque appel de load_config().

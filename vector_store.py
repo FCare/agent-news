@@ -1,10 +1,14 @@
 """
 ChromaDB vector store for semantic search over articles and bulletin topics.
 
-Three collections:
+Four collections:
 - articles       : crawled article bodies (TTL = crawler TTL)
 - bulletin_topics: deep dives from generated bulletins (kept 3 months)
 - publishers     : distinct publisher names for fuzzy/semantic lookup
+- subjects       : vue CONSOLIDÉE d'un sujet à travers plusieurs jours (voir
+                   subject_consolidation.py/storage.py) — un document par sujet,
+                   ré-upserté (même id) à chaque mise à jour de son résumé courant,
+                   contrairement à bulletin_topics qui garde un document PAR ÉDITION.
 """
 
 import hashlib
@@ -23,6 +27,7 @@ _client = None
 _articles_col = None
 _topics_col = None
 _publishers_col = None
+_subjects_col = None
 # Le backfill au démarrage tourne en tâche de fond pendant que d'autres appels
 # (seed_publishers_if_empty, etc.) peuvent initialiser ces singletons depuis un
 # autre thread d'executor — sans verrou, deux threads créent le client/une
@@ -61,12 +66,13 @@ def unload_model() -> None:
     """Libère le modèle d'embedding et la VRAM associée entre deux cycles de
     génération de bulletin. Rechargé automatiquement (lazy) au prochain accès
     à une collection — pas d'action nécessaire côté appelant."""
-    global _client, _articles_col, _topics_col, _publishers_col
+    global _client, _articles_col, _topics_col, _publishers_col, _subjects_col
     with _init_lock:
         _client = None
         _articles_col = None
         _topics_col = None
         _publishers_col = None
+        _subjects_col = None
     try:
         import gc
         import torch
@@ -117,12 +123,31 @@ def _publishers_collection():
     return _publishers_col
 
 
+def _subjects_collection():
+    global _subjects_col
+    if _subjects_col is None:
+        with _init_lock:
+            if _subjects_col is None:
+                _subjects_col = _get_client().get_or_create_collection(
+                    name="subjects",
+                    embedding_function=_get_ef(),
+                    metadata={"hnsw:space": "cosine"},
+                )
+    return _subjects_col
+
+
 def _article_id(url: str) -> str:
     return hashlib.md5(url.encode()).hexdigest()
 
 
 def _topic_id(date: str, title: str) -> str:
     return hashlib.md5(f"{date}:{title}".encode()).hexdigest()
+
+
+def _subject_id(subject_id: int) -> str:
+    # Clé SQLite déjà unique et stable — pas besoin de hasher comme pour les autres
+    # collections, dont la clé naturelle est une chaîne arbitraire (url, date:title).
+    return f"subject-{subject_id}"
 
 
 # ---------------------------------------------------------------------------
@@ -242,6 +267,28 @@ def upsert_bulletin_topics(bulletin_json: dict, date: str) -> None:
         logger.error(f"ChromaDB upsert topics failed: {e}")
 
 
+def upsert_subject(subject_id: int, title: str, category: str, summary: str,
+                    last_updated_date: str) -> None:
+    """Ré-upsert (même id, voir _subject_id) à chaque création ou mise à jour d'un
+    sujet — remplace intégralement le document précédent, la recherche ne porte
+    donc toujours que sur le résumé COURANT, jamais un résumé périmé d'une édition
+    antérieure (voir storage.create_subject/update_subject)."""
+    try:
+        col = _subjects_collection()
+        col.upsert(
+            ids=[_subject_id(subject_id)],
+            documents=[f"{title}\n{summary}"],
+            metadatas=[{
+                "subject_id": subject_id,
+                "category": category,
+                "last_updated_date": last_updated_date,
+                "last_updated_date_int": int(last_updated_date.replace("-", "")),
+            }],
+        )
+    except Exception as e:
+        logger.error(f"ChromaDB upsert subject failed (id {subject_id}): {e}")
+
+
 # ---------------------------------------------------------------------------
 # Search
 # ---------------------------------------------------------------------------
@@ -259,6 +306,25 @@ def search_topics(query: str, n_results: int = 8,
         return _format_results(results)
     except Exception as e:
         logger.error(f"ChromaDB search topics failed: {e}")
+        return []
+
+
+def search_subjects(query: str, n_results: int = 8, category: str | None = None) -> list[dict]:
+    """Double usage : (1) recherche sémantique utilisateur (wiki, sans filtre), et
+    (2) recherche de candidats de continuité par subject_consolidation.py (filtrée
+    sur `category` — voir storage.get_subjects_by_category, même principe)."""
+    try:
+        col = _subjects_collection()
+        count = col.count()
+        if count == 0:
+            return []
+        kwargs = dict(query_texts=[query], n_results=min(n_results, count))
+        if category is not None:
+            kwargs["where"] = {"category": category}
+        results = col.query(**kwargs)
+        return _format_results(results)
+    except Exception as e:
+        logger.error(f"ChromaDB search subjects failed: {e}")
         return []
 
 
@@ -309,6 +375,24 @@ def purge_old_topics(retention_days: int = 90) -> None:
             logger.info(f"ChromaDB: {deleted} topics supprimés (antérieurs au {cutoff_dt.strftime('%Y-%m-%d')})")
     except Exception as e:
         logger.error(f"ChromaDB purge topics failed: {e}")
+
+
+def purge_old_subjects(retention_days: int = 365) -> None:
+    """Miroir de purge_old_topics, mais sur last_updated_date_int et une rétention
+    bien plus longue (voir storage.SUBJECT_RETENTION_DAYS) — un sujet actif ne doit
+    jamais être purgé juste parce qu'il est ancien, seulement s'il est inactif."""
+    from datetime import timedelta
+    cutoff_dt = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    cutoff_int = int(cutoff_dt.strftime("%Y%m%d"))
+    try:
+        col = _subjects_collection()
+        before = col.count()
+        col.delete(where={"last_updated_date_int": {"$lt": cutoff_int}})
+        deleted = before - col.count()
+        if deleted:
+            logger.info(f"ChromaDB: {deleted} sujets supprimés (inactifs depuis avant le {cutoff_dt.strftime('%Y-%m-%d')})")
+    except Exception as e:
+        logger.error(f"ChromaDB purge subjects failed: {e}")
 
 
 def _format_results(results: dict) -> list[dict]:
