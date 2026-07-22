@@ -190,12 +190,14 @@ def _render_category_page(title: str, intro: str, items: list[tuple[str, str, st
 
 
 def _render_date_page(date: str, intro: str, items: list[tuple[str, str, str]],
-                       category_summaries: dict[str, str]) -> str:
+                       category_summaries: dict[str, str], headline: str, flash: str) -> str:
     """items = [(label, lien_relatif, catégorie)] — liste de liens simple, regroupée
     par catégorie (ordre CATEGORIES). Entre le titre de la catégorie et sa liste, un
     paragraphe de synthèse (bulletin_gen.py::_generate_category_summaries, stocké dans
     bulletin_json["category_summaries"]) qui résume TOUS les sujets de cette catégorie
-    pour la journée en un seul texte — pas un résumé par sujet."""
+    pour la journée en un seul texte — pas un résumé par sujet. headline/flash : le
+    bulletin global du jour (bulletin_gen.py::_generate_flash), déjà généré par le
+    pipeline mais jamais affiché jusqu'ici — aucun appel LLM supplémentaire ici."""
     by_category: dict[str, list[tuple[str, str]]] = {}
     for label, link, category in items:
         by_category.setdefault(category, []).append((label, link))
@@ -203,6 +205,15 @@ def _render_date_page(date: str, intro: str, items: list[tuple[str, str, str]],
     lines = [f"# Sujets du {_format_date_fr(date)}", ""]
     if intro:
         lines += [intro, ""]
+    if headline or flash:
+        lines.append("## Bulletin du jour")
+        lines.append("")
+        if headline:
+            lines.append(f"**{headline}**")
+            lines.append("")
+        if flash:
+            lines.append(flash)
+            lines.append("")
     ordered_categories = [c for c in CATEGORIES if c in by_category]
     ordered_categories += [c for c in by_category if c not in CATEGORIES]  # robustesse
     for category in ordered_categories:
@@ -324,10 +335,14 @@ async def run() -> dict:
             for m in members
         ]
         bulletin = await storage.get_bulletin_by_date(date)
-        category_summaries = (bulletin or {}).get("bulletin_json", {}).get("category_summaries", {})
+        bulletin_json = (bulletin or {}).get("bulletin_json", {})
+        category_summaries = bulletin_json.get("category_summaries", {})
+        headline = _clean_text(bulletin_json.get("headline", "")) or ""
+        flash = _clean_text(bulletin_json.get("flash", "")) or ""
         await _write(
             WIKI_SRC_DIR / "dates" / f"{date}.md",
-            _render_date_page(date, f"{len(items)} édition(s) publiée(s) ce jour-là.", items, category_summaries),
+            _render_date_page(date, f"{len(items)} édition(s) publiée(s) ce jour-là.", items,
+                               category_summaries, headline, flash),
         )
         date_items.append((_format_date_fr(date), f"{date}.md", f"{len(items)} édition(s)"))
     await _write(WIKI_SRC_DIR / "dates" / "index.md", _render_list_page("Dates", "", date_items))
