@@ -162,6 +162,37 @@ async def run_bulletin_pipeline() -> None:
         except Exception as e:
             logger.error(f"[2b/4] Consolidation des sujets échouée: {e}")
 
+        # 3ter. Dédoublonnage post-consolidation : le clustering (TF-IDF/DBSCAN)
+        # crée parfois plusieurs topics quasi-identiques pour le même événement réel
+        # dans un même bulletin (constaté à grande échelle sur données réelles,
+        # ~15-20/jour) — consolidate_bulletin() vient de les fusionner en UN SEUL
+        # sujet/édition, mais bulletin["categories"] garde encore les topics perdants
+        # de cette fusion (aucune édition ne les référence plus). Sans ce nettoyage,
+        # category_summaries peut leur emprunter des détails (mauvais pays/continent
+        # p.ex.) qui ne correspondent plus à rien d'affiché sur le wiki — même
+        # logique que backfill_recategorize_summaries.py, appliquée ici en direct
+        # pour ne plus dépendre d'un backfill après coup.
+        try:
+            members_today = await storage.get_subjects_by_date(today)
+            current_category_by_title = {m["edition_title"]: m["category"] for m in members_today}
+            deduped_categories: dict[str, list[dict]] = {}
+            n_dropped = 0
+            for old_cat, stories in bulletin.get("categories", {}).items():
+                for story in stories:
+                    current_cat = current_category_by_title.get(story["title"])
+                    if current_cat is None:
+                        n_dropped += 1
+                        continue
+                    deduped_categories.setdefault(current_cat, []).append(story)
+            if n_dropped:
+                logger.info(f"[2b/4] {n_dropped} topic(s) doublon(s) retiré(s) après consolidation")
+                bulletin["categories"] = deduped_categories
+                bulletin["category_summaries"] = await bulletin_gen._generate_category_summaries(
+                    deduped_categories, llm, LLM_MODEL
+                )
+        except Exception as e:
+            logger.error(f"[2b/4] Dédoublonnage post-consolidation échoué: {e}")
+
         # 4. Save (SQLite + ChromaDB) — only if bulletin is valid
         logger.info("[3/4] Sauvegarde du bulletin...")
         n_topics = sum(len(v) for v in bulletin.get("categories", {}).values())
