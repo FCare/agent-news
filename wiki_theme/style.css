@@ -30,6 +30,14 @@
    de police par défaut du navigateur (souvent plus petite que le texte Material
    environnant) — d'où le texte d'explication au-dessus qui paraissait plus gros que
    la requête tapée juste en dessous. font-size: inherit aligne les deux. */
+/* Texte d'explication au-dessus de la recherche sémantique (accueil) : trop
+   présent à l'écran en taille de paragraphe normale — réduit et adouci en gris,
+   comme un texte d'aide plutôt qu'un contenu éditorial. */
+.md-typeset p.search-hint {
+  font-size: 0.75rem;
+  color: var(--md-default-fg-color--light);
+}
+
 .wiki-search input {
   font-size: inherit;
   font-family: inherit;
