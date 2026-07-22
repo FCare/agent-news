@@ -576,7 +576,7 @@ async def _proofread(title: str, summary: str, deep_dive: str, watch: str,
 
 async def _generate_flash(topics: list[dict],
                            llm_client: openai.OpenAI, model: str) -> tuple[str, str]:
-    top = topics[:10]
+    top = topics[:15]  # 6 phrases, répartition libre entre sujets — vivier élargi (était 10 pour 3 phrases/3 sujets fixes)
     topics_text = "\n".join(
         f"- [{t['category']}] {t['title']}: {t.get('summary', '')[:200]}"
         for t in top
