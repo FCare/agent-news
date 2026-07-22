@@ -206,7 +206,7 @@ def _render_date_page(date: str, intro: str, items: list[tuple[str, str, str]],
     if intro:
         lines += [intro, ""]
     if headline or flash:
-        lines.append("## Bulletin du jour")
+        lines.append("## Bulletin du jour {: .bulletin-heading }")
         lines.append("")
         if headline:
             lines.append(f"**{headline}**")

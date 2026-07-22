@@ -8,3 +8,10 @@
 .md-typeset :target {
   --md-scroll-margin: 10rem;
 }
+
+/* "## Bulletin du jour" (dates/<date>.md) n'est pas un lien — pas de page dédiée
+   vers laquelle pointer — mais doit visuellement se fondre avec les titres de
+   catégorie juste en dessous, qui EUX sont des liens (donc bleus nativement). */
+.md-typeset h2.bulletin-heading {
+  color: var(--md-typeset-a-color);
+}
