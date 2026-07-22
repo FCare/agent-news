@@ -15,3 +15,13 @@
 .md-typeset h2.bulletin-heading {
   color: var(--md-typeset-a-color);
 }
+
+/* Paragraphes justifiés (résumés, "L'essentiel du jour", analyses détaillées...) :
+   sans césure automatique, le texte justifié en colonne étroite crée de grands
+   trous disgracieux entre les mots — hyphens: auto s'appuie sur la langue de la
+   page (theme.language: fr dans mkdocs.yml -> <html lang="fr">) pour utiliser le
+   bon dictionnaire de coupure. */
+.md-typeset p {
+  text-align: justify;
+  hyphens: auto;
+}
