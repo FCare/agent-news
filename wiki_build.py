@@ -38,6 +38,26 @@ WIKI_ASSETS_SRC = Path(__file__).resolve().parent / "wiki_theme"
 
 
 # ---------------------------------------------------------------------------
+# Dates
+# ---------------------------------------------------------------------------
+
+_MONTHS_FR = [
+    "janvier", "février", "mars", "avril", "mai", "juin",
+    "juillet", "août", "septembre", "octobre", "novembre", "décembre",
+]
+
+
+def _format_date_fr(date_str: str) -> str:
+    """'2026-07-22' -> '22 juillet 2026' — affichage uniquement, les slugs/noms de
+    fichiers/ancres restent en ISO (YYYY-MM-DD), triable et sans ambiguïté."""
+    try:
+        year, month, day = date_str.split("-")
+        return f"{int(day)} {_MONTHS_FR[int(month) - 1]} {year}"
+    except (ValueError, IndexError):
+        return date_str
+
+
+# ---------------------------------------------------------------------------
 # Slugs
 # ---------------------------------------------------------------------------
 
@@ -109,19 +129,22 @@ def _format_sources(sources: list[dict]) -> str:
 def _render_subject_page(subject: dict, editions: list[dict]) -> str:
     lines = [f"# {subject['title']}", ""]
     lines.append(f"**Catégorie** : [{subject['category']}](../categories/{_slugify(subject['category'])}.md)  ")
-    lines.append(f"**Suivi depuis le** {subject['first_seen_date']} — **dernière mise à jour le** {subject['last_updated_date']} "
+    lines.append(f"**Suivi depuis le** {_format_date_fr(subject['first_seen_date'])} — "
+                 f"**dernière mise à jour le** {_format_date_fr(subject['last_updated_date'])} "
                  f"({len(editions)} édition(s))")
     lines.append("")
     lines += ["## Résumé", "", subject["summary"], ""]
 
     lines += ["## Historique des éditions", ""]
     for e in sorted(editions, key=lambda x: x["date"], reverse=True):
-        lines.append(f"### {e['date']} — {e['title']} {{: #edition-{e['date']} }}")
+        # Ancre #edition-{date} en ISO (technique, liée depuis d'autres pages) ;
+        # seul le texte affiché passe par _format_date_fr.
+        lines.append(f"### {_format_date_fr(e['date'])} — {e['title']} {{: #edition-{e['date']} }}")
         lines.append("")
         lines.append(e["summary"])
         if e.get("deep_dive"):
             lines.append("")
-            lines.append(f"??? note \"Analyse détaillée du {e['date']}\"")
+            lines.append(f"??? note \"Analyse détaillée du {_format_date_fr(e['date'])}\"")
             lines.append("")
             for paragraph in e["deep_dive"].split("\n"):
                 if paragraph.strip():
@@ -146,6 +169,26 @@ def _render_list_page(title: str, intro: str, items: list[tuple[str, str, str]])
     return "\n".join(lines)
 
 
+def _render_category_page(title: str, intro: str, items: list[tuple[str, str, str, str]]) -> str:
+    """items = [(label, lien_relatif, info_annexe, date)] — regroupés par date de
+    dernière mise à jour du sujet (plus récent en premier), date en séparateur ## ."""
+    by_date: dict[str, list[tuple[str, str, str]]] = {}
+    for label, link, extra, date in items:
+        by_date.setdefault(date, []).append((label, link, extra))
+
+    lines = [f"# {title}", ""]
+    if intro:
+        lines += [intro, ""]
+    for date in sorted(by_date, reverse=True):
+        lines.append(f"## {_format_date_fr(date)}")
+        lines.append("")
+        for label, link, extra in sorted(by_date[date], key=lambda x: _normalize(x[0])):
+            suffix = f" — {extra}" if extra else ""
+            lines.append(f"- [{label}]({link}){suffix}")
+        lines.append("")
+    return "\n".join(lines)
+
+
 def _render_date_page(date: str, intro: str, items: list[tuple[str, str, str]],
                        category_summaries: dict[str, str]) -> str:
     """items = [(label, lien_relatif, catégorie)] — liste de liens simple, regroupée
@@ -157,7 +200,7 @@ def _render_date_page(date: str, intro: str, items: list[tuple[str, str, str]],
     for label, link, category in items:
         by_category.setdefault(category, []).append((label, link))
 
-    lines = [f"# Sujets du {date}", ""]
+    lines = [f"# Sujets du {_format_date_fr(date)}", ""]
     if intro:
         lines += [intro, ""]
     ordered_categories = [c for c in CATEGORIES if c in by_category]
@@ -236,7 +279,10 @@ async def run() -> dict:
         slug = _subject_slug(s["title"], s["id"])
         await _write(WIKI_SRC_DIR / "sujets" / f"{slug}.md", _render_subject_page(s, editions))
 
-        entry = (s["title"], f"../sujets/{slug}.md", f"{len(editions)} édition(s), maj {s['last_updated_date']}")
+        # Le 4e élément (date) sert uniquement au regroupement dans
+        # _render_category_page (## {date} en séparateur) — pas répété dans "extra"
+        # pour éviter la redondance avec le séparateur.
+        entry = (s["title"], f"../sujets/{slug}.md", f"{len(editions)} édition(s)", s["last_updated_date"])
         subject_items_by_category.setdefault(s["category"], []).append(entry)
 
         for e in editions:
@@ -261,7 +307,7 @@ async def run() -> dict:
         cslug = _slugify(cat)
         await _write(
             WIKI_SRC_DIR / "categories" / f"{cslug}.md",
-            _render_list_page(cat, f"{len(members)} sujet(s).", sorted(members, key=lambda m: _normalize(m[0]))),
+            _render_category_page(cat, f"{len(members)} sujet(s).", members),
         )
         category_items.append((cat, f"{cslug}.md", f"{len(members)} sujet(s)"))
     await _write(WIKI_SRC_DIR / "categories" / "index.md", _render_list_page("Catégories", "", category_items))
@@ -283,7 +329,7 @@ async def run() -> dict:
             WIKI_SRC_DIR / "dates" / f"{date}.md",
             _render_date_page(date, f"{len(items)} édition(s) publiée(s) ce jour-là.", items, category_summaries),
         )
-        date_items.append((date, f"{date}.md", f"{len(items)} édition(s)"))
+        date_items.append((_format_date_fr(date), f"{date}.md", f"{len(items)} édition(s)"))
     await _write(WIKI_SRC_DIR / "dates" / "index.md", _render_list_page("Dates", "", date_items))
 
     # Sources

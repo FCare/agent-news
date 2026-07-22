@@ -89,7 +89,14 @@ _DEEP_DIVE_TOOL = [{
                         "Catégorie la plus appropriée pour CE sujet précis, choisie à partir "
                         "de son titre et de son contenu réel — pas une catégorie générique par "
                         "défaut. Ex: un sujet sur la guerre en Ukraine est 'Géopolitique & "
-                        "Défense', pas 'Informatique & IA'."
+                        "Défense', pas 'Informatique & IA'. Distinction FRANCE vs "
+                        "INTERNATIONAL : un événement qui se déroule EN FRANCE ou qui concerne "
+                        "au premier chef un acteur/une institution française (ministre, "
+                        "collectivité, entreprise française...) est TOUJOURS 'France', même "
+                        "traité par un média étranger ou avec une portée internationale — "
+                        "'International' est réservé aux sujets qui se déroulent hors de "
+                        "France ou concernent plusieurs pays sans la France comme acteur "
+                        "principal."
                     ),
                 },
                 "title_fr": {
@@ -183,6 +190,33 @@ _CATEGORY_SUMMARY_TOOL = [{
                 },
             },
             "required": ["summaries"],
+        }
+    }
+}]
+
+_PROOFREAD_TOOL = [{
+    "type": "function",
+    "function": {
+        "name": "proofread_text",
+        "description": (
+            "Relit des textes en français générés automatiquement et corrige les "
+            "artefacts de génération ponctuels : caractères d'un autre alphabet insérés "
+            "au milieu d'un mot (ex: 'seברète' au lieu de 's'apprête'), mots parasites "
+            "incohérents insérés dans une phrase (ex: 'se suku estimant dupée' au lieu de "
+            "'s'estimant dupée'), fragments de texte corrompus ou tronqués de façon "
+            "incohérente. Corrige UNIQUEMENT ce type d'artefact — ne reformule pas, ne "
+            "change ni le sens ni le style de ce qui est déjà correct. Si un champ n'a "
+            "aucun artefact, renvoie-le à l'IDENTIQUE."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "Titre corrigé (identique à l'entrée si déjà propre)."},
+                "summary": {"type": "string", "description": "Résumé corrigé (identique à l'entrée si déjà propre)."},
+                "deep_dive": {"type": "string", "description": "Analyse corrigée (identique à l'entrée si déjà propre)."},
+                "what_to_watch": {"type": "string", "description": "Texte 'à suivre' corrigé (identique à l'entrée si déjà propre)."},
+            },
+            "required": ["title", "summary", "deep_dive", "what_to_watch"],
         }
     }
 }]
@@ -490,6 +524,11 @@ async def _generate_deep_dive(topic: dict, articles: list[RawArticle],
         logger.info(f"  à suivre : {watch}")
     if sources:
         logger.info(f"  sources  : {', '.join(s['name'] for s in sources)}")
+
+    title_fr, summary, deep_dive, watch = await _proofread(
+        title_fr, summary, deep_dive, watch, llm_client, model
+    )
+
     return {
         "title":        title_fr,
         "category":     category,
@@ -500,6 +539,39 @@ async def _generate_deep_dive(topic: dict, articles: list[RawArticle],
         "what_to_watch": watch,
         "sources":      sources,
     }
+
+
+async def _proofread(title: str, summary: str, deep_dive: str, watch: str,
+                      llm_client: openai.OpenAI, model: str) -> tuple[str, str, str, str]:
+    """Relecture systématique du texte généré (title/summary/deep_dive/watch) pour
+    rattraper les artefacts ponctuels de génération constatés sur données réelles avec
+    ce backend quantifié (w4a16) : caractères d'un autre alphabet insérés au milieu
+    d'un mot français, mots parasites incohérents. Champs nommés (pas un tableau
+    positionné par un préfixe "1)/2)/...") : un format numéroté a déjà fait fuiter la
+    numérotation dans le texte traduit (voir backfill_translate.py) — les champs JSON
+    nommés éliminent ce risque. En cas d'échec de l'appel, renvoie le texte original
+    inchangé plutôt que de risquer de perdre du contenu."""
+    result = await _llm(
+        llm_client, model,
+        system=(
+            "Tu relis des textes en français générés automatiquement par un autre "
+            "modèle et corriges UNIQUEMENT les artefacts de génération : caractères "
+            "d'un autre alphabet insérés au milieu d'un mot, mots parasites "
+            "incohérents, fragments corrompus. Ne reformule rien d'autre — un champ "
+            "déjà propre doit être renvoyé strictement identique. Appelle proofread_text."
+        ),
+        user=f"TITRE: {title}\nRÉSUMÉ: {summary}\nANALYSE: {deep_dive}\nÀ_SUIVRE: {watch}",
+        tool=_PROOFREAD_TOOL,
+    )
+    if not result:
+        return title, summary, deep_dive, watch
+    new_title      = result.get("title") or title
+    new_summary    = result.get("summary") or summary
+    new_deep_dive  = result.get("deep_dive") or deep_dive
+    new_watch      = result.get("what_to_watch") or watch
+    if (new_title, new_summary, new_deep_dive, new_watch) != (title, summary, deep_dive, watch):
+        logger.info("  relecture: artefact(s) corrigé(s)")
+    return new_title, new_summary, new_deep_dive, new_watch
 
 
 async def _generate_flash(topics: list[dict],
