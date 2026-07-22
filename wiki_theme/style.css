@@ -34,7 +34,7 @@
    présent à l'écran en taille de paragraphe normale — réduit et adouci en gris,
    comme un texte d'aide plutôt qu'un contenu éditorial. */
 .md-typeset p.search-hint {
-  font-size: 0.75rem;
+  font-size: 0.5rem;
   color: var(--md-default-fg-color--light);
 }
 
