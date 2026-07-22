@@ -148,7 +148,7 @@ _FLASH_TOOL = [{
                 "flash": {
                     "type": "string",
                     "description": (
-                        "3 phrases résumant les 3 sujets les plus importants du jour. "
+                        "6 phrases résumant les sujets les plus importants du jour. "
                         "Style factuel et direct, sans formule d'introduction."
                     )
                 },
