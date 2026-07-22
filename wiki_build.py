@@ -115,7 +115,7 @@ def _render_subject_page(subject: dict, editions: list[dict]) -> str:
     lines += ["## Résumé", "", subject["summary"], ""]
 
     lines += ["## Historique des éditions", ""]
-    for e in sorted(editions, key=lambda x: x["date"]):
+    for e in sorted(editions, key=lambda x: x["date"], reverse=True):
         lines.append(f"### {e['date']} — {e['title']} {{: #edition-{e['date']} }}")
         lines.append("")
         lines.append(e["summary"])
