@@ -25,3 +25,19 @@
   text-align: justify;
   hyphens: auto;
 }
+
+/* Champ de recherche sémantique (accueil) : sans style, <input> hérite de la taille
+   de police par défaut du navigateur (souvent plus petite que le texte Material
+   environnant) — d'où le texte d'explication au-dessus qui paraissait plus gros que
+   la requête tapée juste en dessous. font-size: inherit aligne les deux. */
+.wiki-search input {
+  font-size: inherit;
+  font-family: inherit;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.5em 0.75em;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.2rem;
+  background-color: var(--md-default-bg-color);
+  color: var(--md-default-fg-color);
+}
