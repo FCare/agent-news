@@ -236,9 +236,12 @@ def _render_index_page(n_subjects: int, n_dates: int, n_categories: int, n_publi
         "",
         f"{n_subjects} sujets suivis, consolidés au fil de leurs éditions successives.",
         "",
-        "## Rechercher",
+        "## Recherche sémantique",
         "",
-        "Recherche libre sur les sujets (titre, thème, un détail précis) :",
+        "Comprend le sens de votre requête, pas seulement les mots (ex: \"guerre en "
+        "Ukraine\" trouve les bons sujets même si le titre dit autre chose). Pour une "
+        "recherche classique par mots-clés dans tout le texte du wiki, utilisez la "
+        "loupe 🔍 en haut de page.",
         "",
         '<div class="wiki-search">',
         '  <input id="wiki-search-input" type="search" placeholder="ex: guerre en Ukraine, crise du café…">',
