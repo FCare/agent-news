@@ -152,12 +152,18 @@ def _encode_batches_on_gpu1(model_name: str, docs_batches: list[list[str]], conn
     cuda:0 malgré un modèle explicitement chargé sur cuda:1 et ce contexte actif."""
     import os
     os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+    import logging
     from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+    log = logging.getLogger(__name__)
     try:
-        ef = SentenceTransformerEmbeddingFunction(
-            model_name=model_name, device="cuda",
-            model_kwargs={"torch_dtype": "float16"},
-        )
+        try:
+            ef = SentenceTransformerEmbeddingFunction(
+                model_name=model_name, device="cuda",
+                model_kwargs={"torch_dtype": "float16"},
+            )
+        except Exception as e:
+            log.warning(f"Chargement du modèle sur cuda:1 échoué ({e}), repli CPU")
+            ef = SentenceTransformerEmbeddingFunction(model_name=model_name, device="cpu")
         conn.send([ef(batch) for batch in docs_batches])
     except Exception as e:
         conn.send(e)
