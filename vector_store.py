@@ -46,7 +46,7 @@ def _get_client():
     return _client
 
 
-def _get_ef():
+def _get_ef(device: str = "cuda:0"):
     import torch
     from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
     if torch.cuda.is_available():
@@ -54,34 +54,24 @@ def _get_ef():
             # dtype en string ("float16"), pas l'objet torch.dtype — Chroma sérialise
             # en JSON la config de l'embedding function pour la persister dans la collection.
             return SentenceTransformerEmbeddingFunction(
-                model_name=EMBEDDING_MODEL, device="cuda",
+                model_name=EMBEDDING_MODEL, device=device,
                 model_kwargs={"torch_dtype": "float16"},
             )
         except Exception as e:
-            logger.warning(f"Chargement du modèle sur GPU échoué ({e}), repli CPU")
+            logger.warning(f"Chargement du modèle sur {device} échoué ({e}), repli CPU")
     return SentenceTransformerEmbeddingFunction(model_name=EMBEDDING_MODEL, device="cpu")
 
 
-def unload_model() -> None:
-    """Libère le modèle d'embedding et la VRAM associée entre deux cycles de
-    génération de bulletin. Rechargé automatiquement (lazy) au prochain accès
-    à une collection — pas d'action nécessaire côté appelant."""
-    global _client, _articles_col, _topics_col, _publishers_col, _subjects_col
-    with _init_lock:
-        _client = None
-        _articles_col = None
-        _topics_col = None
-        _publishers_col = None
-        _subjects_col = None
-    try:
-        import gc
-        import torch
-        gc.collect()
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
-        logger.info("ChromaDB: modèle d'embedding déchargé")
-    except Exception as e:
-        logger.error(f"Déchargement du modèle échoué: {e}")
+def warmup_model() -> None:
+    """Force le chargement du modèle d'embedding dès le démarrage de l'agent (appelé
+    une fois dans main()), plutôt que de le laisser se charger paresseusement au
+    premier accès — évite un cold-start de ~20-30s (chargement + vérifications
+    HuggingFace Hub) sur la toute première recherche de wiki-agent après un
+    redémarrage. Le modèle reste ensuite chargé en permanence (pas de unload_model
+    entre les cycles du pipeline, contrairement à avant — marge VRAM désormais
+    suffisante, voir docker-compose.yml de nanovllm-voxcpm)."""
+    _subjects_collection()
+    logger.info("ChromaDB: modèle d'embedding chargé (warmup)")
 
 
 def _articles_collection():
@@ -155,11 +145,29 @@ def _subject_id(subject_id: int) -> str:
 # ---------------------------------------------------------------------------
 
 def upsert_articles(articles: list[dict]) -> None:
-    """Store/update articles in the vector store. Called after each crawl."""
+    """Store/update articles in the vector store. Called after each crawl.
+    Utilise une instance transitoire du modèle d'embedding sur cuda:1 (déchargée
+    juste après, voir finally) plutôt que le singleton persistant de
+    _articles_collection() (cuda:0, utilisé par search_articles) : ce batch de
+    ~1800 articles est le seul point du pipeline avec un besoin ponctuel de VRAM
+    important, à isoler du modèle qui reste chargé en continu sur cuda:0 à côté
+    de voxcpm2/unmute (voir warmup_model).
+    Embeddings calculés à la main puis passés via `embeddings=` plutôt que de
+    confier `ef` à get_or_create_collection : la collection "articles" est
+    persistée depuis des runs antérieurs (EF stockée = cuda:0), et ChromaDB
+    reconstruit l'embedding function depuis cette config au lieu d'utiliser
+    l'instance cuda:1 passée ici — le device demandé était silencieusement
+    ignoré, provoquant le même OOM sur cuda:0 qu'on cherchait à éviter."""
     if not articles:
         return
+    ef = None
     try:
-        col = _articles_collection()
+        ef = _get_ef(device="cuda:1")
+        col = _get_client().get_or_create_collection(
+            name="articles",
+            embedding_function=None,
+            metadata={"hnsw:space": "cosine"},
+        )
         ids, docs, metas = [], [], []
         for a in articles:
             doc = f"{a['title']}\n{(a.get('body') or '')}"
@@ -178,17 +186,28 @@ def upsert_articles(articles: list[dict]) -> None:
                 "crawled_at": crawled_at_str,
                 "crawled_ts": crawled_at_ts,
             })
-        # Batch upsert (ChromaDB handles duplicates)
+        # Batch upsert (ChromaDB handles duplicates) — embeddings calculés via `ef`
+        # (cuda:1) puis fournis directement, voir docstring
         BATCH = 100
         for i in range(0, len(ids), BATCH):
+            batch_docs = docs[i:i+BATCH]
             col.upsert(
                 ids=ids[i:i+BATCH],
-                documents=docs[i:i+BATCH],
+                embeddings=ef(batch_docs),
+                documents=batch_docs,
                 metadatas=metas[i:i+BATCH],
             )
-        logger.info(f"ChromaDB: {len(ids)} articles upsertés")
+        logger.info(f"ChromaDB: {len(ids)} articles upsertés (cuda:1)")
     except Exception as e:
         logger.error(f"ChromaDB upsert articles failed: {e}")
+    finally:
+        if ef is not None:
+            del ef
+            import gc
+            import torch
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
 
 def upsert_publishers(articles: list[dict]) -> None:
@@ -258,7 +277,10 @@ def upsert_bulletin_topics(bulletin_json: dict, date: str) -> None:
                     "date":         date,
                     "date_int":     int(date.replace("-", "")),  # YYYYMMDD for numeric filtering
                     "what_to_watch": s.get("what_to_watch", ""),
-                    "sources":      ", ".join(s.get("sources", [])),
+                    "sources":      ", ".join(
+                        src["name"] if isinstance(src, dict) else src
+                        for src in s.get("sources", [])
+                    ),
                 })
         if ids:
             col.upsert(ids=ids, documents=docs, metadatas=metas)

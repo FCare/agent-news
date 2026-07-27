@@ -44,7 +44,6 @@ LLAMACPP_API_KEY    = os.environ["LLAMACPP_API_KEY"]
 BULLETIN_HOURS      = os.environ.get("BULLETIN_HOURS", "8,20")
 
 AGENT_NAME = "news"
-_subscribed_sessions: set[str] = set()
 _is_generating = False
 _search_client = SearchClient()
 
@@ -133,14 +132,6 @@ async def run_bulletin_pipeline() -> None:
         loop = asyncio.get_event_loop()
         await loop.run_in_executor(None, vector_store.upsert_articles, rows)
         await loop.run_in_executor(None, vector_store.upsert_publishers, rows)
-        # Déchargé dès maintenant plutôt qu'en fin de pipeline seulement : c'est la
-        # seule étape qui a vraiment besoin du modèle d'embedding chargé en continu
-        # (upsert de ~1800 articles) — les ~35-40 min d'enrichissement LLM qui
-        # suivent n'y touchent pas, sauf la consolidation (subject_consolidation.py,
-        # requêtes courtes) qui le rechargera à la volée si besoin (lazy, voir
-        # unload_model). Libère la VRAM pendant cette longue fenêtre pour d'autres
-        # services GPU partagés (voir run_pipeline_with_gpu.sh).
-        await loop.run_in_executor(None, vector_store.unload_model)
 
         # 3. Generate bulletin
         logger.info("[2/4] Clustering et identification des sujets...")
@@ -199,7 +190,7 @@ async def run_bulletin_pipeline() -> None:
         has_flash = bool(bulletin.get("flash", "").strip())
         has_headline = bulletin.get("headline", "") not in ("", "L'actualité du jour")
         if not has_flash or not has_headline:
-            logger.warning("[3/4] Bulletin incomplet (flash ou headline manquant) — sauvegarde ignorée pour ne pas écraser un bulletin valide")
+            logger.error("[3/4] Bulletin incomplet (flash ou headline manquant) — sauvegarde ignorée pour ne pas écraser un bulletin valide")
         else:
             await storage.save_bulletin(
                 date=today,
@@ -240,295 +231,28 @@ async def run_bulletin_pipeline() -> None:
         logger.exception(f"Erreur pipeline: {e}")
     finally:
         _is_generating = False
-        # Le modèle d'embedding n'est utile que le temps du pipeline (crawl +
-        # sauvegarde du bulletin) — le décharger libère la VRAM jusqu'au prochain
-        # cycle (rechargement automatique et transparent au prochain accès).
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, vector_store.unload_model)
-
-# ---------------------------------------------------------------------------
-# Response formatting
-# ---------------------------------------------------------------------------
-
-def _format_flash(bulletin_row: dict, category: str | None = None) -> str:
-    b = bulletin_row["bulletin_json"]
-    date = bulletin_row["date"]
-    categories = b.get("categories", {})
-    parts = [f"[{date}] {b.get('headline', '')}", ""]
-    for cat, stories in categories.items():
-        if category and category.lower() not in cat.lower():
-            continue
-        parts.append(f"── {cat.upper()} ──")
-        for s in stories:
-            parts.append(f"• {s['title']}")
-        parts.append("")
-    return "\n".join(parts)
-
-
-
-def _format_category(bulletin_row: dict, category: str) -> str | None:
-    b = bulletin_row["bulletin_json"]
-    date = bulletin_row["date"]
-    categories = b.get("categories", {})
-
-    # Fuzzy match
-    matched = None
-    for cat in categories:
-        if category.lower() in cat.lower() or cat.lower() in category.lower():
-            matched = cat
-            break
-    if not matched:
-        return None
-
-    stories = categories[matched]
-    parts = [f"[{date}] {matched.upper()}", ""]
-    for story in stories:
-        parts.append(f"• {story['title']}")
-    parts.append("")
-    return "\n".join(parts)
-
-
-def _format_publisher(articles: list[dict], publisher: str) -> str:
-    if not articles:
-        return f"Aucun article récent de '{publisher}'."
-    parts = [f"ARTICLES RÉCENTS — {publisher.upper()}", ""]
-    for a in articles:
-        parts.append(f"• {a['title']}")
-    return "\n".join(parts)
-
-
-# En dessous de ce score de similarité cosinus, on considère qu'aucun sujet du
-# bulletin ne correspond réellement à la question — mieux vaut laisser la main
-# à answer_question (recherche sémantique + LLM) que de renvoyer un sujet
-# vaguement proche mais hors-sujet.
-_DEEP_DIVE_MIN_SCORE = 0.35
-
-
-def _format_deep_dive(bulletin_row: dict, topic_query: str) -> str:
-    b = bulletin_row["bulletin_json"]
-    date = bulletin_row["date"]
-
-    hits = [h for h in vector_store.search_topics(topic_query, n_results=5)
-            if h["metadata"].get("date") == date]
-    if not hits or hits[0]["score"] < _DEEP_DIVE_MIN_SCORE:
-        return None
-
-    best_title = hits[0]["metadata"]["title"]
-    best = next(
-        (story for stories in b.get("categories", {}).values() for story in stories
-         if story["title"] == best_title),
-        None,
-    )
-    if not best:
-        return None
-
-    date_range = best.get("date_range", "")
-    parts = [
-        f"[{date}] {best['title']}",
-        f"Catégorie: {best.get('category', '?')}"
-        + (f"  ·  Sources du {date_range}" if date_range else ""),
-        "",
-        best.get("summary", ""),
-        "",
-        "── ANALYSE APPROFONDIE ──",
-        "",
-        best.get("deep_dive", ""),
-        "",
-    ]
-    if best.get("what_to_watch"):
-        parts += ["── À SUIVRE ──", "", best["what_to_watch"], ""]
-    if best.get("sources"):
-        # sources = [{"name": ..., "url": ...}] (voir bulletin_gen.py::_generate_deep_dive)
-        # depuis la migration ; les anciens bulletins peuvent encore contenir de
-        # simples chaînes (noms de médias sans URL) — les deux formes sont acceptées.
-        names = [s["name"] if isinstance(s, dict) else s for s in best["sources"]]
-        parts.append(f"Sources: {', '.join(names)}")
-
-    return "\n".join(parts)
-
-
-# ---------------------------------------------------------------------------
-# MQTT handlers
-# ---------------------------------------------------------------------------
-
-async def on_user_connected(topic: str, payload) -> None:
-    if not isinstance(payload, dict):
-        return
-
-    username = payload.get("username")
-    password = payload.get("password")
-    session_id = payload.get("session_id")
-    private_topics = payload.get("private_topics", [])
-
-    if not username or not password or not session_id:
-        return
-
-    agent_topics_topic = None
-    for entry in private_topics:
-        for t in entry.get("topics", []):
-            if t["topic"].endswith("/agent_topics"):
-                agent_topics_topic = t["topic"]
-                break
-
-    if not agent_topics_topic:
-        logger.warning(f"[{username}] agent_topics introuvable, skip")
-        return
-
-    request_topic = f"users/{username}/{session_id}/news/request"
-    result_topic  = f"users/{username}/{session_id}/news/result"
-
-    nexus = NexusClient.from_api_key(VK_URL, MQTT_HOST, SERVICE_USERNAME, SERVICE_API_KEY, MQTT_PORT)
-
-    publishers = await storage.get_distinct_publishers()
-
-    await nexus.publish(agent_topics_topic, [{
-        "agent": AGENT_NAME,
-        "topics": [
-            {
-                "topic": request_topic,
-                "description": (
-                    "Source EXCLUSIVE d'actualités en temps réel. OBLIGATOIRE pour toute "
-                    "question sur l'actualité, les nouvelles, les événements récents. "
-                    "news_fetch → sans 'query' : flash du jour (titres) ; avec 'query' "
-                    "(sujet/entité SANS référence temporelle, la date est automatique) : "
-                    "répond sur un sujet/pays/personne/événement précis. 'category' optionnel "
-                    f"(seulement si pas de query) parmi : {', '.join(bulletin_gen.CATEGORIES)} "
-                    "— défaut 'France' si le domaine du flash n'est pas précisé. Ex: "
-                    "'l\\'actu tech' → category='Informatique & IA' ; 'quoi de neuf avec Trump ?' "
-                    "→ query='trump'. "
-                    "source → UNIQUEMENT si un média est cité explicitement par son nom (ex: "
-                    "'les nouvelles de Korben') ; 'publisher' = nom exact tel qu\\'il apparaît "
-                    "dans la liste. "
-                    "Tous types acceptent 'date' optionnel (YYYY-MM-DD) pour un bulletin passé."
-                ),
-                "access": "write",
-                "response_topic": result_topic,
-                "format": {
-                    "type": "news_fetch | source",
-                    "query": "(optionnel) sujet/entité pour news_fetch, ex: 'ukraine', 'trump'",
-                    "category": "(optionnel, news_fetch sans query) voir description pour la liste",
-                    "publisher": "(source uniquement) " + str(publishers),
-                    "date": "(optionnel) YYYY-MM-DD, défaut=aujourd'hui",
-                },
-            },
-            {
-                "topic": result_topic,
-                "description": "Réponse du journal. Champ 'content' contient le texte.",
-                "access": "read",
-                "format": {
-                    "type": "string",
-                    "content": "string",
-                    "bulletin_date": "YYYY-MM-DD",
-                },
-            },
-        ],
-    }])
-    logger.info(f"[{username}/{session_id}] Topics news déclarés")
-
-    if session_id in _subscribed_sessions:
-        return
-    _subscribed_sessions.add(session_id)
-
-    async def on_news_request(t: str, p) -> None:
-        if not isinstance(p, dict):
-            logger.warning(f"[{username}] Payload news invalide (non-dict): {p!r}")
-            await nexus.publish(result_topic, {"error": "Invalid request payload: expected a JSON object"})
-            return
-
-        reply_to = p.get("reply_to", result_topic)
-        req_type = p.get("type", "news_fetch").lower()
-        logger.info(f"[{username}] Requête news: {p}")
-
-        try:
-            await _handle_news_request(p, req_type, reply_to)
-        except Exception as e:
-            logger.exception(f"[{username}] Erreur traitement requête news: {e}")
-            await nexus.publish(reply_to, {
-                "type": req_type,
-                "error": f"Internal error while processing the request: {e}",
-            })
-
-    async def _handle_news_request(p: dict, req_type: str, reply_to: str) -> None:
-        date_param = p.get("date", "").strip()
-        if date_param:
-            bulletin_row = await storage.get_bulletin_by_date(date_param)
-        else:
-            bulletin_row = await storage.get_latest_bulletin()
-
-        content = ""
-
-        if req_type in ("news_fetch", "flash", "question", "deep_dive"):
-            query = (p.get("query") or p.get("topic") or "").strip()
-
-            if query:
-                # Subject/entity query → semantic search + LLM answer
-                if bulletin_row:
-                    result = _format_deep_dive(bulletin_row, query)
-                    if result is not None:
-                        content = result
-                    else:
-                        llm = _get_llm_client()
-                        content = await bulletin_gen.answer_question(
-                            query, bulletin_row["bulletin_json"], _search_client, llm, LLM_MODEL,
-                            ref_date=date_param or bulletin_row["date"],
-                        )
-                else:
-                    content = "Aucun bulletin disponible."
-            else:
-                # No query → flash (full or filtered by category)
-                if bulletin_row:
-                    category_filter = p.get("category", "").strip()
-                    if category_filter:
-                        result = _format_category(bulletin_row, category_filter)
-                        if result is not None:
-                            content = result
-                        else:
-                            llm = _get_llm_client()
-                            content = await bulletin_gen.answer_question(
-                                category_filter, bulletin_row["bulletin_json"], _search_client, llm, LLM_MODEL,
-                                ref_date=date_param or bulletin_row["date"],
-                            )
-                    else:
-                        content = _format_flash(bulletin_row)
-                else:
-                    content = "Bulletin non disponible."
-
-        elif req_type == "source":
-            publisher = p.get("publisher", "").strip()
-            if not publisher:
-                content = "Précise un site ou média avec le champ 'publisher'."
-            else:
-                articles = await storage.get_articles_by_publisher(publisher)
-                if articles:
-                    content = _format_publisher(articles, publisher)
-                else:
-                    loop = asyncio.get_event_loop()
-                    similar = await loop.run_in_executor(
-                        None, vector_store.find_similar_publishers, publisher
-                    )
-                    if similar:
-                        content = f"Aucun article trouvé pour '{publisher}'. Sources proches disponibles : {', '.join(similar)}"
-                    else:
-                        content = f"Aucun article trouvé pour '{publisher}'."
-
-        else:
-            content = f"Type inconnu: {req_type}. Disponibles: news_fetch, source."
-
-        logger.info(f"[{username}] Réponse ({len(content)} chars):\n{content}")
-        await nexus.publish(reply_to, {
-            "type": req_type,
-            "content": content,
-            "bulletin_date": bulletin_row["date"] if bulletin_row else "",
-        })
-
-    nexus.subscribe(request_topic, on_news_request)
-    nexus.start_listening()
-    logger.info(f"[{username}/{session_id}] Abonné à {request_topic}")
-
+        # Modèle d'embedding gardé chargé en permanence (voir warmup au démarrage,
+        # main()) plutôt que déchargé ici entre deux cycles : évite le cold-start de
+        # ~20-30s (chargement + vérifications HuggingFace Hub) subi par wiki-agent
+        # sur la première recherche après un cycle. Marge VRAM suffisante depuis le
+        # plafonnement de voxcpm2 (~10 Go au lieu de ~14,3 Go, voir docker-compose.yml
+        # de nanovllm-voxcpm).
 
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
+# Description exposée sur common/wiki_registry/news (retain=True) pour que wiki-agent sache
+# quoi/où chercher — voir agents/wiki-agent. agent-news ne répond plus lui-même aux
+# requêtes MQTT de Joshua/Panoramix (uniquement construire/maintenir le wiki) ;
+# wiki-agent est désormais le seul point de contact, en consultant ce wiki publié
+# plutôt que la base de données interne (search_topics, non consolidée — voir
+# l'historique de conversation pour le constat qui a motivé ce changement).
+WIKI_REGISTRY_DESCRIPTION = (
+    "Sujets d'actualité consolidés au fil du temps (résumé qui évolue à chaque "
+    "nouvelle édition), organisés par catégorie, date et source."
+)
+
 
 async def main() -> None:
     await storage.init_db()
@@ -537,9 +261,28 @@ async def main() -> None:
     nexus = NexusClient.from_api_key(VK_URL, MQTT_HOST, SERVICE_USERNAME, SERVICE_API_KEY, MQTT_PORT)
 
     await _search_client.setup(nexus, SERVICE_USERNAME, SERVICE_API_KEY)
-
-    nexus.subscribe("common/user_connected", on_user_connected)
+    # Toujours nécessaire même sans abonnement applicatif : _search_client (recherche
+    # web SearXNG pendant l'enrichissement des bulletins) utilise nexus.request(), qui
+    # a besoin de la connexion persistante pour s'abonner à son topic de réponse.
     nexus.start_listening()
+
+    # Avant l'enregistrement du wiki (ci-dessous) : autant que le modèle soit déjà en
+    # cours de chargement avant que wiki-agent puisse recevoir l'annonce et tenter une
+    # recherche.
+    await asyncio.get_event_loop().run_in_executor(None, vector_store.warmup_model)
+
+    await nexus.publish(f"common/wiki_registry/{AGENT_NAME}", {
+        "agent": AGENT_NAME,
+        # Adresse interne du réseau Docker "ansible" (pas le domaine public
+        # news.caronboulme.fr) : ce dernier passe par Traefik + middleware vk-hybrid,
+        # qui rejette (401) les appels d'un service interne sans cookie/API key VK —
+        # inutile ici, wiki-agent et agent-news sont sur le même réseau de confiance.
+        "base_url": "http://agent-news:8080",
+        "search_path": "/api/wiki/search",
+        "description": WIKI_REGISTRY_DESCRIPTION,
+    }, retain=True)
+    logger.info(f"Enregistrement common/wiki_registry/{AGENT_NAME} publié (retain)")
+
     hours = BULLETIN_HOURS
     logger.info(f"News service démarré — LLM: {LLM_MODEL} — bulletins à {hours}h")
 
