@@ -153,6 +153,7 @@ def _encode_batches_on_gpu1(model_name: str, docs_batches: list[list[str]], conn
     import os
     os.environ["CUDA_VISIBLE_DEVICES"] = "1"
     import logging
+    import torch
     from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
     log = logging.getLogger(__name__)
     try:
@@ -164,7 +165,23 @@ def _encode_batches_on_gpu1(model_name: str, docs_batches: list[list[str]], conn
         except Exception as e:
             log.warning(f"Chargement du modèle sur cuda:1 échoué ({e}), repli CPU")
             ef = SentenceTransformerEmbeddingFunction(model_name=model_name, device="cpu")
-        conn.send([ef(batch) for batch in docs_batches])
+
+        # GPU1 est partagée avec thebrain (marge fine et fluctuante, voir OOM
+        # transitoires observés en pratique) — un OOM PENDANT l'encodage (pas
+        # seulement au chargement) doit aussi retomber sur CPU, batch par batch,
+        # plutôt que de faire échouer tout le cycle d'upsert.
+        cpu_ef = None
+        results = []
+        for batch in docs_batches:
+            try:
+                results.append(ef(batch))
+            except torch.cuda.OutOfMemoryError as e:
+                log.warning(f"OOM sur cuda:1 pendant l'encodage d'un batch ({e}), repli CPU pour ce batch")
+                torch.cuda.empty_cache()
+                if cpu_ef is None:
+                    cpu_ef = SentenceTransformerEmbeddingFunction(model_name=model_name, device="cpu")
+                results.append(cpu_ef(batch))
+        conn.send(results)
     except Exception as e:
         conn.send(e)
     finally:
