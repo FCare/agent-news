@@ -144,25 +144,41 @@ def _subject_id(subject_id: int) -> str:
 # Upsert
 # ---------------------------------------------------------------------------
 
+def _encode_batches_on_gpu1(model_name: str, docs_batches: list[list[str]], conn) -> None:
+    """Cible d'un sous-processus spawné (voir upsert_articles) avec
+    CUDA_VISIBLE_DEVICES=1 : rend GPU0 physiquement invisible au driver pour CE
+    process, seule garantie fiable après l'échec de torch.cuda.device(1) — des
+    opérations internes à bge-m3/sentence-transformers continuaient d'allouer sur
+    cuda:0 malgré un modèle explicitement chargé sur cuda:1 et ce contexte actif."""
+    import os
+    os.environ["CUDA_VISIBLE_DEVICES"] = "1"
+    from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+    try:
+        ef = SentenceTransformerEmbeddingFunction(
+            model_name=model_name, device="cuda",
+            model_kwargs={"torch_dtype": "float16"},
+        )
+        conn.send([ef(batch) for batch in docs_batches])
+    except Exception as e:
+        conn.send(e)
+    finally:
+        conn.close()
+
+
 def upsert_articles(articles: list[dict]) -> None:
     """Store/update articles in the vector store. Called after each crawl.
-    Utilise une instance transitoire du modèle d'embedding sur cuda:1 (déchargée
-    juste après, voir finally) plutôt que le singleton persistant de
-    _articles_collection() (cuda:0, utilisé par search_articles) : ce batch de
-    ~1800 articles est le seul point du pipeline avec un besoin ponctuel de VRAM
-    important, à isoler du modèle qui reste chargé en continu sur cuda:0 à côté
-    de voxcpm2/unmute (voir warmup_model).
-    Embeddings calculés à la main puis passés via `embeddings=` plutôt que de
-    confier `ef` à get_or_create_collection : la collection "articles" est
-    persistée depuis des runs antérieurs (EF stockée = cuda:0), et ChromaDB
-    reconstruit l'embedding function depuis cette config au lieu d'utiliser
-    l'instance cuda:1 passée ici — le device demandé était silencieusement
-    ignoré, provoquant le même OOM sur cuda:0 qu'on cherchait à éviter."""
+    Calcule les embeddings dans un sous-processus isolé sur GPU1 (voir
+    _encode_batches_on_gpu1) plutôt que dans le process principal (dont le modèle
+    persistant tourne sur GPU0, voir warmup_model) : ce batch de ~1800 articles est
+    le seul point du pipeline avec un besoin ponctuel de VRAM important, à isoler
+    de GPU0 (déjà saturé par voxcpm2/unmute/le modèle persistant).
+    Embeddings passés via `embeddings=` (get_or_create_collection sans embedding_
+    function) plutôt que via une EF ChromaDB : évite aussi que ChromaDB ne
+    reconstruise l'embedding function depuis la config persistée de la collection
+    "articles" (créée à l'origine sur cuda:0)."""
     if not articles:
         return
-    ef = None
     try:
-        ef = _get_ef(device="cuda:1")
         col = _get_client().get_or_create_collection(
             name="articles",
             embedding_function=None,
@@ -186,36 +202,34 @@ def upsert_articles(articles: list[dict]) -> None:
                 "crawled_at": crawled_at_str,
                 "crawled_ts": crawled_at_ts,
             })
-        # Batch upsert (ChromaDB handles duplicates) — embeddings calculés via `ef`
-        # (cuda:1) puis fournis directement, voir docstring. torch.cuda.device(1) :
-        # bge-m3 (tête sparse/colbert de sentence-transformers) émet en interne des
-        # `.cuda()` sans index explicite — ils suivent le device COURANT du process,
-        # pas model.device — sans ce contexte ils atterrissent sur cuda:0 (déjà
-        # saturé par voxcpm2/unmute/le modèle persistant) au lieu de cuda:1.
-        import contextlib
-        import torch
-        device_ctx = torch.cuda.device(1) if torch.cuda.is_available() else contextlib.nullcontext()
+
         BATCH = 100
-        with device_ctx:
-            for i in range(0, len(ids), BATCH):
-                batch_docs = docs[i:i+BATCH]
-                col.upsert(
-                    ids=ids[i:i+BATCH],
-                    embeddings=ef(batch_docs),
-                    documents=batch_docs,
-                    metadatas=metas[i:i+BATCH],
-                )
-        logger.info(f"ChromaDB: {len(ids)} articles upsertés (cuda:1)")
+        docs_batches = [docs[i:i+BATCH] for i in range(0, len(docs), BATCH)]
+
+        import multiprocessing as mp
+        ctx = mp.get_context("spawn")
+        parent_conn, child_conn = ctx.Pipe()
+        proc = ctx.Process(
+            target=_encode_batches_on_gpu1,
+            args=(EMBEDDING_MODEL, docs_batches, child_conn),
+        )
+        proc.start()
+        result = parent_conn.recv()
+        proc.join(timeout=300)
+        if isinstance(result, Exception):
+            raise result
+
+        for i, embeddings in enumerate(result):
+            start = i * BATCH
+            col.upsert(
+                ids=ids[start:start+BATCH],
+                embeddings=embeddings,
+                documents=docs_batches[i],
+                metadatas=metas[start:start+BATCH],
+            )
+        logger.info(f"ChromaDB: {len(ids)} articles upsertés (GPU1, sous-processus isolé)")
     except Exception as e:
         logger.error(f"ChromaDB upsert articles failed: {e}")
-    finally:
-        if ef is not None:
-            del ef
-            import gc
-            import torch
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
 
 
 def upsert_publishers(articles: list[dict]) -> None:
