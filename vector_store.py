@@ -187,16 +187,24 @@ def upsert_articles(articles: list[dict]) -> None:
                 "crawled_ts": crawled_at_ts,
             })
         # Batch upsert (ChromaDB handles duplicates) — embeddings calculés via `ef`
-        # (cuda:1) puis fournis directement, voir docstring
+        # (cuda:1) puis fournis directement, voir docstring. torch.cuda.device(1) :
+        # bge-m3 (tête sparse/colbert de sentence-transformers) émet en interne des
+        # `.cuda()` sans index explicite — ils suivent le device COURANT du process,
+        # pas model.device — sans ce contexte ils atterrissent sur cuda:0 (déjà
+        # saturé par voxcpm2/unmute/le modèle persistant) au lieu de cuda:1.
+        import contextlib
+        import torch
+        device_ctx = torch.cuda.device(1) if torch.cuda.is_available() else contextlib.nullcontext()
         BATCH = 100
-        for i in range(0, len(ids), BATCH):
-            batch_docs = docs[i:i+BATCH]
-            col.upsert(
-                ids=ids[i:i+BATCH],
-                embeddings=ef(batch_docs),
-                documents=batch_docs,
-                metadatas=metas[i:i+BATCH],
-            )
+        with device_ctx:
+            for i in range(0, len(ids), BATCH):
+                batch_docs = docs[i:i+BATCH]
+                col.upsert(
+                    ids=ids[i:i+BATCH],
+                    embeddings=ef(batch_docs),
+                    documents=batch_docs,
+                    metadatas=metas[i:i+BATCH],
+                )
         logger.info(f"ChromaDB: {len(ids)} articles upsertés (cuda:1)")
     except Exception as e:
         logger.error(f"ChromaDB upsert articles failed: {e}")
