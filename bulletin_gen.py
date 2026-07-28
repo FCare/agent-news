@@ -335,6 +335,12 @@ def _llm_call(llm_client: openai.OpenAI, model: str, system: str,
         return recovered
 
 
+# Un texte rendu en entier se termine par une ponctuation ; un fragment coupé
+# par le parseur s'arrête n'importe où. Second signal, qui évite de prendre pour
+# une corruption un texte ouvrant légitimement sur une citation.
+_FINS_DE_PHRASE = (".", "!", "?", "…", "»", ":", ";")
+
+
 def _looks_truncated(result: dict) -> str | None:
     """Détecte une valeur amputée par le parseur de tool call du backend.
 
@@ -345,10 +351,18 @@ def _looks_truncated(result: dict) -> str | None:
     a fait échouer toute une génération. Le guillemet ouvrant est le marqueur
     commun à tous les cas observés (flash, analyse, résumé, à-suivre).
 
+    Le guillemet doit être resté ouvert : une valeur qui ouvre ET referme est
+    une citation légitime, ou une chaîne vide rendue littéralement ('""'), que
+    la consolidation produit à chaque fois qu'elle ne veut rien changer. Les
+    compter comme corrompues coûtait un appel LLM pour rien.
+
     Retourne le nom du champ fautif, ou None si tout va bien.
     """
     for champ, valeur in result.items():
-        if isinstance(valeur, str) and valeur.lstrip().startswith('"'):
+        if not isinstance(valeur, str):
+            continue
+        v = valeur.strip()
+        if v.startswith('"') and not v.endswith('"') and not v.endswith(_FINS_DE_PHRASE):
             return champ
     return None
 
