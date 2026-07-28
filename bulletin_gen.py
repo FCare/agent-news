@@ -41,6 +41,7 @@ CATEGORIES = [
 MAX_TOPICS = int(os.environ.get("MAX_TOPICS", 25))  # cap after TF-IDF clustering
 MAX_BODY_IN_DEEP_DIVE = 3000         # full article body (matches crawler MAX_BODY_CHARS)
 MAX_ARTICLES_IN_DEEP_DIVE = 8        # max articles per topic in deep dive
+MAX_BODY_IN_QUERY_GEN = 600          # assez pour lever l'ambiguïté d'un titre imagé
 # Par volet, pas par rapport : agent-web-search renvoie un volet 'background'
 # (encyclopédie et web) et un volet 'recent' (presse). Tronquer le rapport
 # concaténé faisait disparaître le second, qui arrive en fin de chaîne — le
@@ -389,9 +390,24 @@ def _do_cluster_topics(articles: list[RawArticle]) -> list[dict]:
     return topics
 
 
-async def _generate_search_queries(topic: dict,
+async def _generate_search_queries(topic: dict, articles: list[RawArticle],
                                     llm_client: openai.OpenAI, model: str) -> list[str]:
+    """Génère les requêtes d'enrichissement à partir du texte, pas du seul titre.
+
+    Un titre de presse est souvent métaphorique, et le LLM le prend au pied de
+    la lettre. Constaté sur « la Gironde submergée par un élan de solidarité » :
+    il a compris "inondations", généré des requêtes sur les crues, et le web a
+    confirmé l'erreur — il existe de vraies crues en Gironde dans les archives.
+    Le bulletin a décrit des inondations avec 200 000 sinistrés et 3 milliards
+    de dégâts, alors que le département brûlait. Les extraits d'articles lèvent
+    l'ambiguïté que le titre seul entretient.
+    """
     logger.info(f"    → appel LLM requêtes...")
+    matched = _find_articles_for_topic(topic, articles, n=3)
+    extraits = "\n\n".join(
+        f"[{a.publisher}] {a.title}\n{(a.body or '')[:MAX_BODY_IN_QUERY_GEN]}"
+        for a in matched
+    )
     result = await _llm(
         llm_client, model,
         system=(
@@ -400,11 +416,15 @@ async def _generate_search_queries(topic: dict,
             "Couvre: (1) faits récents, (2) contexte/historique, (3) réactions officielles, "
             "(4) implications économiques ou géopolitiques, (5) perspectives d'experts. "
             "Requêtes courtes et efficaces pour un moteur d'actualités. "
+            "IMPORTANT: le titre peut être imagé ou accrocheur — identifie de quoi il "
+            "s'agit RÉELLEMENT d'après les extraits d'articles, jamais d'après le seul "
+            "titre, et n'introduis dans tes requêtes aucun fait qui n'y figure pas. "
             "Appelle generate_search_queries."
         ),
         user=(
             f"Sujet: {topic['title']}\n"
-            f"Catégorie: {topic['category']}"
+            f"Catégorie: {topic['category']}\n"
+            + (f"\n=== EXTRAITS D'ARTICLES ===\n{extraits}" if extraits else "")
         ),
         tool=_SEARCH_QUERIES_TOOL,
     )
@@ -683,7 +703,7 @@ async def generate_bulletin(articles: list[RawArticle], search_client: SearchCli
 
     async def _process_topic(topic: dict, i: int) -> dict:
         logger.info(f"  sujet [{i+1}/{len(topics)}] {topic['title']!r} ({topic['category']})")
-        queries = await _generate_search_queries(topic, llm_client, model)
+        queries = await _generate_search_queries(topic, articles, llm_client, model)
         search_results = await search_client.search_many(queries)
         n_results = sum(1 for r in search_results if r.get("report"))
         logger.info(f"  sujet [{i+1}/{len(topics)}] {n_results}/{len(queries)} résultats → deep dive en cours")
