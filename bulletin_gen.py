@@ -41,7 +41,11 @@ CATEGORIES = [
 MAX_TOPICS = int(os.environ.get("MAX_TOPICS", 25))  # cap after TF-IDF clustering
 MAX_BODY_IN_DEEP_DIVE = 3000         # full article body (matches crawler MAX_BODY_CHARS)
 MAX_ARTICLES_IN_DEEP_DIVE = 8        # max articles per topic in deep dive
-MAX_SEARCH_REPORT_IN_DEEP_DIVE = 2000  # richer search context
+# Par volet, pas par rapport : agent-web-search renvoie un volet 'background'
+# (encyclopédie et web) et un volet 'recent' (presse). Tronquer le rapport
+# concaténé faisait disparaître le second, qui arrive en fin de chaîne — le
+# deep dive n'aurait vu que du contexte historique, jamais l'actualité.
+MAX_SEARCH_SECTION_IN_DEEP_DIVE = 1200
 SEARCH_QUERIES_PER_TOPIC = int(os.environ.get("SEARCH_QUERIES_PER_TOPIC", 5))
 
 # ---------------------------------------------------------------------------
@@ -452,12 +456,20 @@ async def _generate_deep_dive(topic: dict, articles: list[RawArticle],
     else:
         date_range = ""
 
-    # Gather search reports
+    # Gather search reports, en tronquant chaque volet séparément pour que
+    # l'actualité survive au budget de contexte (voir la constante).
     search_excerpts = []
     for r in search_results:
-        report = (r.get("report") or "").strip()
-        if report:
-            search_excerpts.append(report[:MAX_SEARCH_REPORT_IN_DEEP_DIVE])
+        sections = []
+        for label, key in (("Fond", "background"), ("Actualité", "recent")):
+            section = (r.get(key) or "").strip()
+            if section:
+                sections.append(f"[{label}]\n{section[:MAX_SEARCH_SECTION_IN_DEEP_DIVE]}")
+        if sections:
+            search_excerpts.append("\n\n".join(sections))
+        elif (report := (r.get("report") or "").strip()):
+            # Réponse d'un agent qui ne renvoie pas encore les deux volets
+            search_excerpts.append(report[:MAX_SEARCH_SECTION_IN_DEEP_DIVE * 2])
 
     articles_block = "\n\n---\n\n".join(article_excerpts) or "(aucun extrait)"
     searches_block = "\n\n---\n\n".join(search_excerpts) or "(aucun résultat)"
