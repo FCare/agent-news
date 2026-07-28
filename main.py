@@ -33,11 +33,13 @@ logger = logging.getLogger(__name__)
 # Config
 # ---------------------------------------------------------------------------
 
-VK_URL              = os.environ["VK_URL"]
 MQTT_HOST           = os.environ["MQTT_HOST"]
 MQTT_PORT           = int(os.environ.get("MQTT_PORT", "1883"))
-SERVICE_USERNAME    = os.environ["MQTT_SERVICE_USERNAME"]
-SERVICE_API_KEY     = os.environ["MQTT_SERVICE_API_KEY"]
+
+# Authentik OAuth
+AUTHENTIK_URL       = os.environ.get("AUTHENTIK_URL", "https://sso.caronboulme.fr")
+AUTHENTIK_CLIENT_ID = os.environ["AUTHENTIK_CLIENT_ID"]
+AUTHENTIK_CLIENT_SECRET = os.environ["AUTHENTIK_CLIENT_SECRET"]
 LLM_BASE_URL        = os.environ.get("LLM_BASE_URL", "https://thebrain.caronboulme.fr/v1")
 LLM_MODEL           = os.environ.get("LLM_MODEL", "qwen3-vl-8b-instruct")
 LLAMACPP_API_KEY    = os.environ["LLAMACPP_API_KEY"]
@@ -258,9 +260,39 @@ async def main() -> None:
     await storage.init_db()
 
     global _search_client
-    nexus = NexusClient.from_api_key(VK_URL, MQTT_HOST, SERVICE_USERNAME, SERVICE_API_KEY, MQTT_PORT)
 
-    await _search_client.setup(nexus, SERVICE_USERNAME, SERVICE_API_KEY)
+    logger.info("Connexion MQTT via Authentik OAuth...")
+    # Obtenir un token Client Credentials
+    import httpx
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"{AUTHENTIK_URL}/application/o/token/",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": AUTHENTIK_CLIENT_ID,
+                "client_secret": AUTHENTIK_CLIENT_SECRET,
+            },
+        )
+        if resp.status_code != 200:
+            logger.error(f"Échec obtention token OAuth: {resp.status_code} {resp.text}")
+            raise RuntimeError("Cannot get OAuth token")
+
+        token_data = resp.json()
+        access_token = token_data["access_token"]
+        logger.info(f"Token OAuth obtenu (expire dans {token_data['expires_in']}s)")
+
+    nexus = await NexusClient.from_authentik_token(
+        AUTHENTIK_URL,
+        MQTT_HOST,
+        access_token,
+        AUTHENTIK_CLIENT_ID,
+        AUTHENTIK_CLIENT_SECRET,
+        MQTT_PORT,
+    )
+    username = nexus._username
+    logger.info(f"NexusClient créé avec username: {username}")
+
+    await _search_client.setup(nexus, username, "")
     # Toujours nécessaire même sans abonnement applicatif : _search_client (recherche
     # web SearXNG pendant l'enrichissement des bulletins) utilise nexus.request(), qui
     # a besoin de la connexion persistante pour s'abonner à son topic de réponse.
