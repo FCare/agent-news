@@ -573,6 +573,28 @@ async def _generate_deep_dive(topic: dict, articles: list[RawArticle],
     }
 
 
+def _keep_if_intact(champ: str, original: str, relu: str | None,
+                    seuil: float = 0.7) -> str:
+    """Garde la version relue seulement si elle n'a pas perdu de contenu.
+
+    La relecture ne corrige que des artefacts ponctuels : sa sortie doit faire
+    la même longueur que l'entrée. Or elle rend parfois un fragment — constaté
+    sur 6 analyses d'une édition, réduites à quelques dizaines de caractères
+    ouvrant sur un guillemet ('"Le conflit à Gaza') alors que l'original en
+    faisait 1400. Le garde-fou ne couvrait que la réponse vide, si bien qu'un
+    fragment écrasait l'analyse complète et arrivait tel quel dans le bulletin.
+    """
+    if not relu:
+        return original
+    if original and len(relu) < len(original) * seuil:
+        logger.warning(
+            f"  relecture ignorée ({champ}): {len(relu)} car. contre {len(original)} "
+            f"à l'origine — troncature, pas une correction"
+        )
+        return original
+    return relu
+
+
 async def _proofread(title: str, summary: str, deep_dive: str, watch: str,
                       llm_client: openai.OpenAI, model: str) -> tuple[str, str, str, str]:
     """Relecture systématique du texte généré (title/summary/deep_dive/watch) pour
@@ -597,10 +619,10 @@ async def _proofread(title: str, summary: str, deep_dive: str, watch: str,
     )
     if not result:
         return title, summary, deep_dive, watch
-    new_title      = result.get("title") or title
-    new_summary    = result.get("summary") or summary
-    new_deep_dive  = result.get("deep_dive") or deep_dive
-    new_watch      = result.get("what_to_watch") or watch
+    new_title      = _keep_if_intact("titre",     title,      result.get("title"))
+    new_summary    = _keep_if_intact("résumé",    summary,    result.get("summary"))
+    new_deep_dive  = _keep_if_intact("analyse",   deep_dive,  result.get("deep_dive"))
+    new_watch      = _keep_if_intact("à suivre",  watch,      result.get("what_to_watch"))
     if (new_title, new_summary, new_deep_dive, new_watch) != (title, summary, deep_dive, watch):
         logger.info("  relecture: artefact(s) corrigé(s)")
     return new_title, new_summary, new_deep_dive, new_watch
