@@ -3,6 +3,7 @@ import json
 import logging
 import math
 import os
+import re
 from datetime import datetime, timezone
 
 import openai
@@ -340,6 +341,15 @@ def _llm_call(llm_client: openai.OpenAI, model: str, system: str,
 # une corruption un texte ouvrant légitimement sur une citation.
 _FINS_DE_PHRASE = (".", "!", "?", "…", "»", ":", ";")
 
+# Caractère d'un autre alphabet collé à des lettres latines : le modèle en glisse
+# parfois un au milieu d'un mot français ('faits divers 온vients' pour 'récents').
+# Exiger le contact avec du latin distingue l'artefact d'une citation légitime en
+# alphabet non latin, où les caractères vont par groupes.
+_ALPHABET_ETRANGER = re.compile(
+    r"[a-zA-ZÀ-ÿ][Ѐ-ӿ֐-׿؀-ۿ぀-ヿ一-鿿가-힯]"
+    r"|[Ѐ-ӿ֐-׿؀-ۿ぀-ヿ一-鿿가-힯][a-zA-ZÀ-ÿ]"
+)
+
 
 def _looks_truncated(result: dict) -> str | None:
     """Détecte une valeur amputée par le parseur de tool call du backend.
@@ -359,10 +369,19 @@ def _looks_truncated(result: dict) -> str | None:
     Retourne le nom du champ fautif, ou None si tout va bien.
     """
     for champ, valeur in result.items():
+        if isinstance(valeur, list):
+            # Réponses en tableau (synthèses par catégorie, sujets) : inspecter
+            # les valeurs de chaque entrée.
+            for item in valeur:
+                if isinstance(item, dict) and (fautif := _looks_truncated(item)):
+                    return f"{champ}[{fautif}]"
+            continue
         if not isinstance(valeur, str):
             continue
         v = valeur.strip()
         if v.startswith('"') and not v.endswith('"') and not v.endswith(_FINS_DE_PHRASE):
+            return champ
+        if _ALPHABET_ETRANGER.search(v):
             return champ
     return None
 
@@ -681,6 +700,77 @@ async def _proofread(title: str, summary: str, deep_dive: str, watch: str,
     return new_title, new_summary, new_deep_dive, new_watch
 
 
+_PROOFREAD_MAPPING_TOOL = [{
+    "type": "function",
+    "function": {
+        "name": "proofread_texts",
+        "description": "Renvoie chaque texte corrigé de ses artefacts de génération.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "textes": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "cle": {"type": "string", "description": "Clé du texte, recopiée à l'identique."},
+                            "texte": {"type": "string", "description": "Texte corrigé (identique à l'entrée si déjà propre)."},
+                        },
+                        "required": ["cle", "texte"],
+                    },
+                }
+            },
+            "required": ["textes"],
+        },
+    },
+}]
+
+
+async def _proofread_mapping(textes: dict[str, str], llm_client: openai.OpenAI,
+                             model: str, libelle: str = "texte") -> dict[str, str]:
+    """Relit un ensemble de textes nommés, en un seul appel.
+
+    Même objet que _proofread, mais pour les textes du bulletin qui ne sont pas
+    rattachés à un sujet — flash, titre du jour, synthèses par catégorie. Ils
+    n'étaient relus par personne : une synthèse a été publiée avec un caractère
+    coréen inséré dans un mot ('faits divers 온vients'), exactement l'artefact
+    que la relecture des sujets rattrape depuis toujours.
+
+    Chaque texte est repris individuellement par _keep_if_intact : une clé
+    absente de la réponse, ou raccourcie, garde sa version d'origine.
+    """
+    textes = {k: v for k, v in textes.items() if v}
+    if not textes:
+        return {}
+
+    result = await _llm(
+        llm_client, model,
+        system=(
+            "Tu relis des textes en français générés automatiquement par un autre "
+            "modèle et corriges UNIQUEMENT les artefacts de génération : caractères "
+            "d'un autre alphabet insérés au milieu d'un mot, mots parasites "
+            "incohérents, fragments corrompus. Ne reformule rien d'autre — un texte "
+            "déjà propre doit être renvoyé strictement identique, et sa clé recopiée "
+            "telle quelle. Appelle proofread_texts."
+        ),
+        user="\n\n".join(f"[{cle}]\n{texte}" for cle, texte in textes.items()),
+        tool=_PROOFREAD_MAPPING_TOOL,
+    )
+
+    relus = {
+        t["cle"]: t["texte"]
+        for t in result.get("textes", [])
+        if isinstance(t, dict) and t.get("cle") and t.get("texte")
+    }
+    sortie = {
+        cle: _keep_if_intact(f"{libelle} {cle}", original, relus.get(cle))
+        for cle, original in textes.items()
+    }
+    if sortie != textes:
+        logger.info(f"  relecture {libelle}: artefact(s) corrigé(s)")
+    return sortie
+
+
 async def _generate_flash(topics: list[dict],
                            llm_client: openai.OpenAI, model: str) -> tuple[str, str]:
     top = topics[:15]  # 6 phrases, répartition libre entre sujets — vivier élargi (était 10 pour 3 phrases/3 sujets fixes)
@@ -801,6 +891,22 @@ async def generate_bulletin(articles: list[RawArticle], search_client: SearchCli
     bulletin["category_summaries"] = await _generate_category_summaries(
         bulletin["categories"], llm_client, model
     )
+
+    # Relecture des textes hors sujets : ils échappaient à _proofread, qui ne
+    # couvre que les champs d'un sujet. Le flash et le titre passent en un appel,
+    # les synthèses par catégorie en un second.
+    logger.info(f"[3/4] Relecture du flash et des synthèses...")
+    entete = await _proofread_mapping(
+        {"headline": bulletin["headline"], "flash": bulletin["flash"]},
+        llm_client, model, libelle="entête",
+    )
+    bulletin["headline"] = entete.get("headline", bulletin["headline"])
+    bulletin["flash"] = entete.get("flash", bulletin["flash"])
+    if bulletin["category_summaries"]:
+        bulletin["category_summaries"] = await _proofread_mapping(
+            bulletin["category_summaries"], llm_client, model, libelle="catégorie",
+        )
+
     logger.info(
         f"Bulletin généré: {sum(len(v) for v in bulletin['categories'].values())} sujets "
         f"en {len(bulletin['categories'])} catégories"
