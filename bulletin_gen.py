@@ -335,17 +335,56 @@ def _llm_call(llm_client: openai.OpenAI, model: str, system: str,
         return recovered
 
 
+def _looks_truncated(result: dict) -> str | None:
+    """Détecte une valeur amputée par le parseur de tool call du backend.
+
+    Le modèle produit parfois un guillemet droit non échappé en ouverture de
+    valeur ; le parseur coupe alors sur le guillemet ou la virgule suivante et
+    rend un fragment. Le JSON reste valide, aucune exception n'est levée, et le
+    fragment part dans le bulletin — un flash réduit à '"Un séisme de magnitude 7'
+    a fait échouer toute une génération. Le guillemet ouvrant est le marqueur
+    commun à tous les cas observés (flash, analyse, résumé, à-suivre).
+
+    Retourne le nom du champ fautif, ou None si tout va bien.
+    """
+    for champ, valeur in result.items():
+        if isinstance(valeur, str) and valeur.lstrip().startswith('"'):
+            return champ
+    return None
+
+
 async def _llm(llm_client: openai.OpenAI, model: str, system: str,
-               user: str, tool: list, max_tokens: int | None = None) -> dict:
+               user: str, tool: list, max_tokens: int | None = None,
+               tentatives: int = 2) -> dict:
+    """Appelle le LLM, en rejouant une fois si la réponse revient amputée.
+
+    La corruption est intermittente (~10% des appels sur ce backend), donc un
+    second essai suffit presque toujours.
+    """
     loop = asyncio.get_event_loop()
-    async with _LLM_SEMAPHORE:
-        try:
-            return await loop.run_in_executor(
-                None, _llm_call, llm_client, model, system, user, tool, max_tokens
-            )
-        except Exception as e:
-            logger.error(f"LLM call failed: {e}")
+    for essai in range(1, tentatives + 1):
+        async with _LLM_SEMAPHORE:
+            try:
+                result = await loop.run_in_executor(
+                    None, _llm_call, llm_client, model, system, user, tool, max_tokens
+                )
+            except Exception as e:
+                logger.error(f"LLM call failed: {e}")
+                return {}
+
+        if not result:
             return {}
+        champ = _looks_truncated(result)
+        if champ is None:
+            return result
+        if essai < tentatives:
+            logger.warning(
+                f"  réponse LLM amputée sur '{champ}' ({len(result[champ])} car.) — "
+                f"nouvel essai {essai + 1}/{tentatives}"
+            )
+        else:
+            logger.error(f"  réponse LLM toujours amputée sur '{champ}' après {tentatives} essais")
+    return result
 
 
 # ---------------------------------------------------------------------------
