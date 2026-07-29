@@ -366,7 +366,9 @@ def _looks_truncated(result: dict) -> str | None:
     la consolidation produit à chaque fois qu'elle ne veut rien changer. Les
     compter comme corrompues coûtait un appel LLM pour rien.
 
-    Retourne le nom du champ fautif, ou None si tout va bien.
+    Retourne (chemin du champ fautif, sa valeur), ou None si tout va bien. La
+    valeur est rendue avec le chemin parce que celui-ci peut désigner une entrée
+    de tableau ('textes[texte]') et n'est donc pas indexable sur le résultat.
     """
     for champ, valeur in result.items():
         if isinstance(valeur, list):
@@ -374,15 +376,15 @@ def _looks_truncated(result: dict) -> str | None:
             # les valeurs de chaque entrée.
             for item in valeur:
                 if isinstance(item, dict) and (fautif := _looks_truncated(item)):
-                    return f"{champ}[{fautif}]"
+                    return f"{champ}[{fautif[0]}]", fautif[1]
             continue
         if not isinstance(valeur, str):
             continue
         v = valeur.strip()
         if v.startswith('"') and not v.endswith('"') and not v.endswith(_FINS_DE_PHRASE):
-            return champ
+            return champ, valeur
         if _ALPHABET_ETRANGER.search(v):
-            return champ
+            return champ, valeur
     return None
 
 
@@ -407,12 +409,17 @@ async def _llm(llm_client: openai.OpenAI, model: str, system: str,
 
         if not result:
             return {}
-        champ = _looks_truncated(result)
-        if champ is None:
+        fautif = _looks_truncated(result)
+        if fautif is None:
             return result
+        # La valeur vient de _looks_truncated, jamais d'une indexation de result :
+        # pour une corruption nichée dans un tableau, le nom rapporté est un
+        # chemin ('textes[texte]') et non une clé — l'indexer levait un KeyError
+        # qui a fait échouer toute une génération.
+        champ, valeur = fautif
         if essai < tentatives:
             logger.warning(
-                f"  réponse LLM amputée sur '{champ}' ({len(result[champ])} car.) — "
+                f"  réponse LLM amputée sur '{champ}' ({len(valeur)} car.) — "
                 f"nouvel essai {essai + 1}/{tentatives}"
             )
         else:
@@ -895,17 +902,25 @@ async def generate_bulletin(articles: list[RawArticle], search_client: SearchCli
     # Relecture des textes hors sujets : ils échappaient à _proofread, qui ne
     # couvre que les champs d'un sujet. Le flash et le titre passent en un appel,
     # les synthèses par catégorie en un second.
+    #
+    # Sous try/except : cette relecture n'est qu'une amélioration cosmétique du
+    # bulletin, elle ne doit jamais pouvoir le faire perdre. Un KeyError dans son
+    # propre message de log a déjà fait échouer une génération entière alors que
+    # les 100 sujets étaient prêts.
     logger.info(f"[3/4] Relecture du flash et des synthèses...")
-    entete = await _proofread_mapping(
-        {"headline": bulletin["headline"], "flash": bulletin["flash"]},
-        llm_client, model, libelle="entête",
-    )
-    bulletin["headline"] = entete.get("headline", bulletin["headline"])
-    bulletin["flash"] = entete.get("flash", bulletin["flash"])
-    if bulletin["category_summaries"]:
-        bulletin["category_summaries"] = await _proofread_mapping(
-            bulletin["category_summaries"], llm_client, model, libelle="catégorie",
+    try:
+        entete = await _proofread_mapping(
+            {"headline": bulletin["headline"], "flash": bulletin["flash"]},
+            llm_client, model, libelle="entête",
         )
+        bulletin["headline"] = entete.get("headline", bulletin["headline"])
+        bulletin["flash"] = entete.get("flash", bulletin["flash"])
+        if bulletin["category_summaries"]:
+            bulletin["category_summaries"] = await _proofread_mapping(
+                bulletin["category_summaries"], llm_client, model, libelle="catégorie",
+            )
+    except Exception as e:
+        logger.exception(f"[3/4] Relecture du flash et des synthèses échouée, on garde le texte tel quel: {e}")
 
     logger.info(
         f"Bulletin généré: {sum(len(v) for v in bulletin['categories'].values())} sujets "
