@@ -155,7 +155,7 @@ async def run_bulletin_pipeline() -> None:
         except Exception as e:
             logger.error(f"[2b/4] Consolidation des sujets échouée: {e}")
 
-        # 3ter. Dédoublonnage post-consolidation : le clustering (TF-IDF/DBSCAN)
+        # 3ter. Alignement post-consolidation : le clustering (TF-IDF/DBSCAN)
         # crée parfois plusieurs topics quasi-identiques pour le même événement réel
         # dans un même bulletin (constaté à grande échelle sur données réelles,
         # ~15-20/jour) — consolidate_bulletin() vient de les fusionner en UN SEUL
@@ -165,26 +165,38 @@ async def run_bulletin_pipeline() -> None:
         # p.ex.) qui ne correspondent plus à rien d'affiché sur le wiki — même
         # logique que backfill_recategorize_summaries.py, appliquée ici en direct
         # pour ne plus dépendre d'un backfill après coup.
+        # De plus, la consolidation peut changer les catégories des sujets (vote
+        # majoritaire) — on doit toujours aligner bulletin["categories"] sur les
+        # catégories de storage pour que category_summaries corresponde au wiki.
         try:
             members_today = await storage.get_subjects_by_date(today)
             current_category_by_title = {m["edition_title"]: m["category"] for m in members_today}
             deduped_categories: dict[str, list[dict]] = {}
             n_dropped = 0
+            n_recategorized = 0
             for old_cat, stories in bulletin.get("categories", {}).items():
                 for story in stories:
                     current_cat = current_category_by_title.get(story["title"])
                     if current_cat is None:
                         n_dropped += 1
                         continue
+                    if current_cat != old_cat:
+                        n_recategorized += 1
                     deduped_categories.setdefault(current_cat, []).append(story)
-            if n_dropped:
-                logger.info(f"[2b/4] {n_dropped} topic(s) doublon(s) retiré(s) après consolidation")
+            # Toujours aligner les catégories du bulletin sur celles de storage
+            # (pas seulement quand des doublons sont détectés) pour garantir que
+            # category_summaries correspond aux catégories affichées sur le wiki.
+            if n_dropped or n_recategorized:
+                if n_dropped:
+                    logger.info(f"[2b/4] {n_dropped} topic(s) doublon(s) retiré(s) après consolidation")
+                if n_recategorized:
+                    logger.info(f"[2b/4] {n_recategorized} topic(s) recatégorisé(s) après consolidation")
                 bulletin["categories"] = deduped_categories
                 bulletin["category_summaries"] = await bulletin_gen._generate_category_summaries(
                     deduped_categories, llm, LLM_MODEL
                 )
         except Exception as e:
-            logger.error(f"[2b/4] Dédoublonnage post-consolidation échoué: {e}")
+            logger.error(f"[2b/4] Alignement post-consolidation échoué: {e}")
 
         # 4. Save (SQLite + ChromaDB) — only if bulletin is valid
         logger.info("[3/4] Sauvegarde du bulletin...")

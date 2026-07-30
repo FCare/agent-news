@@ -350,6 +350,17 @@ _ALPHABET_ETRANGER = re.compile(
     r"|[Ѐ-ӿ֐-׿؀-ۿ぀-ヿ一-鿿가-힯][a-zA-ZÀ-ÿ]"
 )
 
+# Artefacts de décodage du modèle quantifié : tokens de contrôle qui "fuient"
+# dans le texte généré. Observés: '<|"|>', '<|', '|>', etc. Ces séquences
+# n'ont aucun sens en français et trahissent une corruption de la génération.
+_ARTEFACT_TOKENS = re.compile(
+    r"<\|\"?\|>"      # <|"<|> ou <|>
+    r"|<\|"           # <| seul
+    r"\"\|>"          # "|> seul
+    r"|recherche scientifique annonce"  # Fragment spécifique observé
+    r"|^[^a-zA-ZÀ-ÿ]*<\|"  # Commence par des caractères non-alphabétiques suivis de <|
+)
+
 
 def _looks_truncated(result: dict) -> str | None:
     """Détecte une valeur amputée par le parseur de tool call du backend.
@@ -384,6 +395,8 @@ def _looks_truncated(result: dict) -> str | None:
         if v.startswith('"') and not v.endswith('"') and not v.endswith(_FINS_DE_PHRASE):
             return champ, valeur
         if _ALPHABET_ETRANGER.search(v):
+            return champ, valeur
+        if _ARTEFACT_TOKENS.search(v):
             return champ, valeur
     return None
 
@@ -459,9 +472,39 @@ def _find_articles_for_topic(topic: dict, articles: list[RawArticle],
 # ---------------------------------------------------------------------------
 
 def _do_cluster_topics(articles: list[RawArticle]) -> list[dict]:
-    """TF-IDF + DBSCAN clustering — no LLM, instant."""
-    topics = cluster_articles(articles)
-    topics = topics[:MAX_TOPICS]
+    """TF-IDF + DBSCAN clustering — no LLM, instant.
+    
+    Garantit au moins 1 sujet par catégorie (diversité éditoriale), puis remplit
+    avec les sujets les plus importants jusqu'à MAX_TOPICS.
+    """
+    all_topics = cluster_articles(articles)
+    
+    # 1. Garantir au moins 1 sujet par catégorie (le plus important de chaque)
+    selected = []
+    seen_ids = set()
+    by_category: dict[str, list[dict]] = {}
+    for t in all_topics:
+        cat = t.get("category", "International")
+        by_category.setdefault(cat, []).append(t)
+    
+    for cat, topics_in_cat in by_category.items():
+        if topics_in_cat:
+            best = topics_in_cat[0]  # Déjà triés par importance dans cluster_articles
+            selected.append(best)
+            seen_ids.add(id(best))
+    
+    # 2. Remplir avec les sujets restants les plus importants jusqu'à MAX_TOPICS
+    for t in all_topics:
+        if len(selected) >= MAX_TOPICS:
+            break
+        if id(t) not in seen_ids:
+            selected.append(t)
+            seen_ids.add(id(t))
+    
+    # Trier par importance décroissante pour l'affichage
+    selected.sort(key=lambda t: t.get("importance", 0), reverse=True)
+    topics = selected[:MAX_TOPICS]
+    
     for t in topics:
         logger.info(
             f"  [{t['article_count']:3d} art.] [{t['category']}] {t['title']}"
@@ -828,29 +871,40 @@ async def _generate_category_summaries(categories: dict[str, list[dict]],
                                         llm_client: openai.OpenAI, model: str) -> dict[str, str]:
     """Un bulletin de synthèse par catégorie (pas par sujet) — ex: pour 'International'
     avec 5 sujets aujourd'hui, un paragraphe qui les résume ENSEMBLE, affiché sur la
-    page wiki dates/<date>.md entre le titre de la catégorie et la liste des sujets."""
+    page wiki dates/<date>.md entre le titre de la catégorie et la liste des sujets.
+
+    Génère une synthèse par catégorie individuellement (appel LLM séparé) pour éviter
+    les problèmes de contexte trop long qui corrompaient les réponses (tokens de contrôle
+    qui fuient dans le texte avec le modèle quantifié).
+    """
     if not categories:
         return {}
-    blocks = []
+
+    summaries = {}
     for cat, stories in categories.items():
         stories_text = "\n".join(f"- {s['title']}: {s.get('summary', '')[:200]}" for s in stories)
-        blocks.append(f"### {cat} ({len(stories)} sujet(s))\n{stories_text}")
-    user_content = "\n\n".join(blocks)
+        user_content = f"### {cat} ({len(stories)} sujet(s))\n{stories_text}"
 
-    logger.info(f"  → appel LLM synthèses par catégorie ({len(categories)} catégories)...")
-    result = await _llm(
-        llm_client, model,
-        system=(
-            "Tu rédiges un bulletin de synthèse pour chaque catégorie d'actualité donnée, à "
-            "partir de la liste de ses sujets du jour. Un paragraphe par catégorie, qui couvre "
-            "l'ensemble des sujets listés — pas un résumé sujet par sujet, une synthèse "
-            "d'ensemble façon flash radio. Style factuel et direct, sans formule d'introduction. "
-            "Appelle generate_category_summaries avec une entrée par catégorie fournie."
-        ),
-        user=user_content,
-        tool=_CATEGORY_SUMMARY_TOOL,
-    )
-    return {s["category"]: s["summary"] for s in result.get("summaries", []) if s.get("category") and s.get("summary")}
+        logger.info(f"  → appel LLM synthèse catégorie '{cat}' ({len(stories)} sujets)...")
+        result = await _llm(
+            llm_client, model,
+            system=(
+                "Tu rédiges un bulletin de synthèse pour une catégorie d'actualité, à "
+                "partir de la liste de ses sujets du jour. Un seul paragraphe qui couvre "
+                "l'ensemble des sujets listés — pas un résumé sujet par sujet, une synthèse "
+                "d'ensemble façon flash radio. Style factuel et direct, sans formule d'introduction. "
+                "Appelle generate_category_summaries."
+            ),
+            user=user_content,
+            tool=_CATEGORY_SUMMARY_TOOL,
+        )
+
+        for s in result.get("summaries", []):
+            if s.get("category") and s.get("summary"):
+                summaries[s["category"]] = s["summary"]
+                break
+
+    return summaries
 
 
 # ---------------------------------------------------------------------------

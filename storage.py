@@ -240,12 +240,30 @@ async def _majority_category(db: aiosqlite.Connection, subject_id: int, fallback
     produit parfois une catégorie absurde qui ne se corrige jamais). Les éditions
     d'avant cette migration n'ont pas de catégorie (NULL) et sont ignorées du vote ;
     si aucune édition catégorisée n'existe encore, on garde `fallback` (la catégorie
-    actuelle du sujet)."""
+    actuelle du sujet).
+    
+    Ne considère que les catégories valides (définies dans CATEGORIES) pour éviter
+    les catégories invalides comme 'Santé & Environnement' qui résulteraient d'un
+    vote entre 'Médecine & Santé' et 'Société & Environnement'.
+    """
+    # Catégories valides — doit correspondre à bulletin_gen.py::CATEGORIES
+    VALID_CATEGORIES = {
+        "International", "Europe", "France", "Économie & Finance",
+        "Géopolitique & Défense", "Informatique & IA", "Astronomie & Espace",
+        "Science & Technologie", "Médecine & Santé", "Sport",
+        "Automobile & Mobilité", "Immobilier & Logement", "Voyages & Tourisme",
+        "Droit & Justice", "Éducation & Recherche", "Société & Environnement",
+        "Culture & Médias",
+    }
+    
     async with db.execute(
         "SELECT category, COUNT(*) AS n FROM subject_editions "
         "WHERE subject_id = ? AND category IS NOT NULL AND category != '' "
-        "GROUP BY category ORDER BY n DESC, category ASC LIMIT 1",
-        (subject_id,),
+        "AND category IN ({}) "
+        "GROUP BY category ORDER BY n DESC, category ASC LIMIT 1".format(
+            ','.join('?' * len(VALID_CATEGORIES))
+        ),
+        (subject_id,) + tuple(VALID_CATEGORIES),
     ) as cur:
         row = await cur.fetchone()
     return row[0] if row else fallback
