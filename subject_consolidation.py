@@ -91,7 +91,7 @@ async def _find_candidate(
     PAS de filtre par catégorie ici (contrairement à une première version) : constaté
     sur le backfill réel que bulletin_gen.py catégorise parfois différemment le même
     événement réel d'un jour à l'autre (ex: la finale du Mondial 2026 vue tour à tour
-    "Sport", "Astronomie & Espace", "Informatique & IA") — un filtre strict fragmentait
+    "Sport", "Science & Espace", "Tech & Numérique") — un filtre strict fragmentait
     donc un même sujet en une dizaine d'entrées disjointes. La confirmation LLM
     ci-dessous (règle explicite anti-faux-positif) reste le seul garde-fou nécessaire."""
     query = f"{topic.get('title', '')}\n{topic.get('summary', '')}"

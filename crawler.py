@@ -174,6 +174,8 @@ RSS_FEEDS = [
     # ── BD & Comics ──────────────────────────────────────────────────────
     ("https://www.actuabd.com/?page=backend",                            "ActuaBD",             "FR"),
     ("https://www.cbr.com/feed/",                                        "CBR Comics",          "US"),
+    # ── Cinéma & Musique (sorties) ───────────────────────────────────────
+    ("https://www.allocine.fr/rss/news.xml",                             "AlloCiné",            "FR"),
 ]
 
 REGIONS = ["us", "uk", "fr", "es", "nl"]

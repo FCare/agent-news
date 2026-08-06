@@ -243,17 +243,15 @@ async def _majority_category(db: aiosqlite.Connection, subject_id: int, fallback
     actuelle du sujet).
     
     Ne considère que les catégories valides (définies dans CATEGORIES) pour éviter
-    les catégories invalides comme 'Santé & Environnement' qui résulteraient d'un
-    vote entre 'Médecine & Santé' et 'Société & Environnement'.
+    les catégories invalides qui résulteraient d'un vote entre deux catégories
+    proches (ex: hallucination fusionnant 'Santé' et 'Environnement').
     """
     # Catégories valides — doit correspondre à bulletin_gen.py::CATEGORIES
     VALID_CATEGORIES = {
-        "International", "Europe", "France", "Économie & Finance",
-        "Géopolitique & Défense", "Informatique & IA", "Astronomie & Espace",
-        "Science & Technologie", "Médecine & Santé", "Sport",
-        "Automobile & Mobilité", "Immobilier & Logement", "Voyages & Tourisme",
-        "Droit & Justice", "Éducation & Recherche", "Société & Environnement",
-        "Culture & Médias",
+        "Politique", "France", "International", "Économie & Finance",
+        "Tech & Numérique", "Science & Espace", "Santé", "Sport",
+        "Environnement", "Société", "Justice", "Faits divers",
+        "Éducation & Recherche", "Culture & Médias", "Bons plans",
     }
     
     async with db.execute(

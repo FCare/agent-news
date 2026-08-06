@@ -21,27 +21,32 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 CATEGORIES = [
-    "International",
-    "Europe",
+    "Politique",
     "France",
+    "International",
     "Économie & Finance",
-    "Géopolitique & Défense",
-    "Informatique & IA",
-    "Astronomie & Espace",
-    "Science & Technologie",
-    "Médecine & Santé",
+    "Tech & Numérique",
+    "Science & Espace",
+    "Santé",
     "Sport",
-    "Automobile & Mobilité",
-    "Immobilier & Logement",
-    "Voyages & Tourisme",
-    "Droit & Justice",
+    "Environnement",
+    "Société",
+    "Justice",
+    "Faits divers",
     "Éducation & Recherche",
-    "Société & Environnement",
     "Culture & Médias",
+    "Bons plans",
 ]
 
 _CATEGORY_KEYWORDS: list[tuple[str, list[str]]] = [
-    ("Informatique & IA", [
+    ("Bons plans", [
+        "bon plan", "bons plans", "promo", "promos", "promotion", "promotions",
+        "réduction", "réductions", "code promo", "code promotionnel", "coupon",
+        "solde", "soldes", "vente flash", "prix cassé", "prix cassés",
+        "black friday", "cyber monday", "french days", "meilleur prix",
+        "moins cher", "offre spéciale", "offre limitée", "à ne pas manquer",
+    ]),
+    ("Tech & Numérique", [
         "ia", "intelligence artificielle", "artificial intelligence", "llm", "gpt", "chatgpt",
         "openai", "anthropic", "gemini", "mistral", "deepseek", "copilot", "claude",
         "cybersécurité", "cybersecurity", "hack", "malware", "ransomware", "faille",
@@ -50,20 +55,19 @@ _CATEGORY_KEYWORDS: list[tuple[str, list[str]]] = [
         "stackoverflow", "github", "open source", "linux", "windows", "android",
         "chip", "nvidia", "processeur", "semiconduteur",
     ]),
-    ("Astronomie & Espace", [
+    ("Science & Espace", [
+        "recherche", "scientifique", "découverte", "étude", "physique", "chimie",
+        "biologie", "génétique", "laboratoire", "expérience",
+        "énergie", "nucléaire", "solaire", "hydrogène", "fusion nucléaire",
+        "nanotechnologie", "quantum", "quantique",
+        # Astronomie & espace
         "espace", "nasa", "spacex", "esa", "satellite", "fusée", "rocket", "lanceur",
         "mars", "lune", "moon", "jupiter", "vénus", "astéroïde", "comète",
         "astronaute", "cosmonaute", "iss", "station spatiale", "télescope",
         "james webb", "hubble", "exoplanète", "trou noir", "supernova", "galaxie",
         "exploration spatiale", "ariane", "starship", "falcon",
     ]),
-    ("Science & Technologie", [
-        "recherche", "scientifique", "découverte", "étude", "physique", "chimie",
-        "biologie", "génétique", "laboratoire", "expérience",
-        "énergie", "nucléaire", "solaire", "hydrogène", "fusion nucléaire",
-        "nanotechnologie", "quantum", "quantique",
-    ]),
-    ("Médecine & Santé", [
+    ("Santé", [
         "médecine", "médical", "santé", "hôpital", "clinique", "chirurgie",
         "vaccin", "vaccination", "épidémie", "pandémie", "virus", "pathogène",
         "cancer", "tumeur", "thérapie", "traitement", "médicament", "pharmaceutique",
@@ -81,40 +85,22 @@ _CATEGORY_KEYWORDS: list[tuple[str, list[str]]] = [
         "sport", "sportif", "sportive", "entraîneur", "coach", "transfert", "joueur",
         "joueuse", "champion", "championnat", "tournoi", "match", "score", "but", "essai",
     ]),
-    ("Automobile & Mobilité", [
-        "voiture", "automobile", "auto", "car", "véhicule", "véhicule électrique",
-        "vé", "ev", "tesla", "renault", "peugeot", "stellantis", "volkswagen", "toyota",
-        "bmw", "mercedes", "audi", "ford", "gm", "general motors",
-        "moteur", "carburant", "essence", "diesel", "hybride", "recharge", "borne",
-        "permis de conduire", "sécurité routière", "accident de la route",
-        "transport", "autoroute", "embouteillage", "trafic",
-        "moto", "scooter", "trottinette", "vélo électrique", "mobilité douce",
-        "sncf", "ratp", "train", "tgv", "métro", "tramway", "bus",
+    ("Faits divers", [
+        "fait divers", "faits divers", "accident", "collision", "incendie",
+        "noyade", "noyé", "disparition", "disparu", "disparue", "enlèvement",
+        "kidnapping", "séquestration", "otage", "cambriolage", "braquage",
+        "vol à main armée", "explosion", "effondrement", "intoxication",
+        "chute mortelle", "drame", "tuerie", "fusillade", "meurtre", "homicide",
+        "agression", "viol", "coups de couteau", "égorgé",
     ]),
-    ("Immobilier & Logement", [
-        "immobilier", "logement", "appartement", "maison", "loyer", "location",
-        "achat immobilier", "vente immobilier", "prix immobilier", "marché immobilier",
-        "propriétaire", "locataire", "bailleur", "agence immobilière",
-        "construction", "promoteur", "permis de construire", "rénovation",
-        "hlm", "logement social", "crise du logement", "squat", "expulsion",
-        "taux hypothécaire", "crédit immobilier", "prêt immobilier",
-    ]),
-    ("Voyages & Tourisme", [
-        "voyage", "tourisme", "touriste", "destination", "vacances", "séjour",
-        "hôtel", "airbnb", "booking", "croisière", "charter",
-        "aéroport", "compagnie aérienne", "airline", "vol", "grève aérien",
-        "passeport", "visa", "frontière", "douane",
-        "patrimoine", "unesco", "site touristique", "musée", "monument",
-        "île", "plage", "montagne", "randonnée", "camping",
-    ]),
-    ("Droit & Justice", [
+    ("Justice", [
         "tribunal", "cour", "jugement", "verdict", "condamné", "condamnation",
         "acquittement", "procès", "audience", "plainte", "inculpé", "mis en examen",
         "prison", "incarcération", "peine", "liberté conditionnelle",
         "avocat", "magistrat", "juge", "procureur", "parquet",
         "loi", "législation", "jurisprudence", "constitution", "décret",
         "droits humains", "human rights", "amnesty", "discrimination", "harcèlement",
-        "viol", "agression", "meurtre", "homicide", "fraude", "corruption",
+        "fraude", "corruption",
         "cour suprême", "conseil constitutionnel", "cour de cassation",
     ]),
     ("Éducation & Recherche", [
@@ -126,11 +112,17 @@ _CATEGORY_KEYWORDS: list[tuple[str, list[str]]] = [
         "cnrs", "inserm", "inrae", "bourse", "master",
         "alphabétisation", "illettrisme", "formation professionnelle",
     ]),
-    ("Géopolitique & Défense", [
+    ("International", [
+        # Géopolitique & défense
         "guerre", "war", "militaire", "military", "conflit", "conflict", "otan", "nato",
         "armée", "army", "missile", "drone", "arme", "weapon", "sanctions",
         "ukraine", "russie", "russia", "israel", "gaza", "iran", "corée",
         "diplomatie", "ambassadeur", "traité", "treaty", "sommet", "summit",
+        # Europe
+        "europe", "european", "ue", "union européenne", "bruxelles", "brussels",
+        "commission européenne", "parlement européen", "eurozone",
+        "allemagne", "germany", "italie", "italy", "espagne", "spain",
+        "royaume-uni", "uk", "britain", "brexit", "pologne", "hongrie",
     ]),
     ("Économie & Finance", [
         "économie", "economy", "bourse", "stock", "marché", "market", "inflation",
@@ -138,30 +130,48 @@ _CATEGORY_KEYWORDS: list[tuple[str, list[str]]] = [
         "emploi", "chômage", "unemployment", "commerce", "trade", "budget",
         "entreprise", "company", "startup", "acquisition", "fusion", "merger",
         "bitcoin", "crypto", "ethereum", "finance",
+        # Automobile & mobilité
+        "voiture", "automobile", "auto", "car", "véhicule", "véhicule électrique",
+        "vé", "ev", "tesla", "renault", "peugeot", "stellantis", "volkswagen", "toyota",
+        "bmw", "mercedes", "audi", "ford", "gm", "general motors",
+        "moteur", "carburant", "essence", "diesel", "hybride", "recharge", "borne",
+        "permis de conduire", "sécurité routière", "accident de la route",
+        "transport", "autoroute", "embouteillage", "trafic",
+        "moto", "scooter", "trottinette", "vélo électrique", "mobilité douce",
+        "sncf", "ratp", "train", "tgv", "métro", "tramway", "bus",
+        # Immobilier & logement
+        "immobilier", "logement", "appartement", "maison", "loyer", "location",
+        "achat immobilier", "vente immobilier", "prix immobilier", "marché immobilier",
+        "propriétaire", "locataire", "bailleur", "agence immobilière",
+        "construction", "promoteur", "permis de construire", "rénovation",
+        "hlm", "logement social", "crise du logement", "squat", "expulsion",
+        "taux hypothécaire", "crédit immobilier", "prêt immobilier",
+    ]),
+    ("Politique", [
+        "assemblée nationale", "sénat", "élysée", "gouvernement", "ministre",
+        "premier ministre", "président", "présidente", "élection", "élections",
+        "scrutin", "réforme des retraites", "projet de loi", "motion de censure",
+        "dissolution", "primaire", "campagne électorale", "parti politique",
+        "députés", "sénateurs", "conseil des ministres", "matignon",
     ]),
     ("France", [
-        "france", "paris", "assemblée nationale", "sénat", "élysée",
-        "gouvernement", "ministre", "premier ministre", "président", "présidente",
-        "loi", "réforme", "grève", "manifestation", "police", "gendarmerie",
-        "célébrité", "people", "personnalité", "médias français",
-    ]),
-    ("Europe", [
-        "europe", "european", "ue", "union européenne", "bruxelles", "brussels",
-        "commission européenne", "parlement européen", "eurozone",
-        "allemagne", "germany", "italie", "italy", "espagne", "spain",
-        "royaume-uni", "uk", "britain", "brexit", "pologne", "hongrie",
+        "france", "paris", "grève", "manifestation", "police", "gendarmerie",
     ]),
     ("Culture & Médias", [
         # Cinéma & séries
         "film", "cinéma", "cinema", "movie", "série", "series", "netflix", "amazon prime",
         "disney", "hbo", "streaming", "oscar", "césar", "festival", "cannes",
         "réalisateur", "acteur", "actrice", "box office",
+        "sort en salle", "sort au cinéma", "sortie cinéma", "sortie en salles",
+        "avant-première", "bande-annonce", "trailer",
         # Musique
         "musique", "music", "album", "concert", "tournée", "tour", "chanteur",
         "chanteuse", "groupe", "grammy", "victoires de la musique", "spotify",
+        "nouvel album", "nouveau single", "nouveau clip", "sortie d'album",
+        "sortie de l'album",
         # People & célébrités
         "célébrité", "people", "personnalité", "show business", "showbiz",
-        "people", "star", "vedette", "influenceur", "influencer",
+        "star", "vedette", "influenceur", "influencer",
         # Jeux vidéo
         "jeu vidéo", "video game", "gaming", "playstation", "xbox", "nintendo",
         "steam", "e-sport", "esport",
@@ -172,15 +182,16 @@ _CATEGORY_KEYWORDS: list[tuple[str, list[str]]] = [
         # Médias
         "presse", "journal", "media", "médias", "journaliste", "télévision", "radio",
     ]),
-    ("Société & Environnement", [
+    ("Environnement", [
         "climat", "climate", "environnement", "environment", "écologie", "ecology",
         "réchauffement", "co2", "émissions", "pollution", "biodiversité",
+    ]),
+    ("Société", [
         "migration", "immigration", "réfugié", "refugee",
         "inégalité", "pauvreté", "poverty", "précarité",
         "féminisme", "sexisme", "racisme", "lgbtq", "diversité",
         "société", "communauté", "association", "bénévolat",
     ]),
-    ("International", []),  # default catch-all
 ]
 
 
@@ -189,7 +200,7 @@ def _assign_category(text: str) -> str:
     for category, keywords in _CATEGORY_KEYWORDS:
         if any(kw in text_lower for kw in keywords):
             return category
-    return "International"
+    return "International"  # default catch-all: no keyword matched above
 
 
 # ---------------------------------------------------------------------------

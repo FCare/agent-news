@@ -17,23 +17,21 @@ logger = logging.getLogger(__name__)
 _LLM_SEMAPHORE = asyncio.Semaphore(1)
 
 CATEGORIES = [
-    "International",
-    "Europe",
+    "Politique",
     "France",
+    "International",
     "Économie & Finance",
-    "Géopolitique & Défense",
-    "Informatique & IA",
-    "Astronomie & Espace",
-    "Science & Technologie",
-    "Médecine & Santé",
+    "Tech & Numérique",
+    "Science & Espace",
+    "Santé",
     "Sport",
-    "Automobile & Mobilité",
-    "Immobilier & Logement",
-    "Voyages & Tourisme",
-    "Droit & Justice",
+    "Environnement",
+    "Société",
+    "Justice",
+    "Faits divers",
     "Éducation & Recherche",
-    "Société & Environnement",
     "Culture & Médias",
+    "Bons plans",
 ]
 
 # Context budget: 128k tokens available.
@@ -94,15 +92,36 @@ _DEEP_DIVE_TOOL = [{
                     "description": (
                         "Catégorie la plus appropriée pour CE sujet précis, choisie à partir "
                         "de son titre et de son contenu réel — pas une catégorie générique par "
-                        "défaut. Ex: un sujet sur la guerre en Ukraine est 'Géopolitique & "
-                        "Défense', pas 'Informatique & IA'. Distinction FRANCE vs "
-                        "INTERNATIONAL : un événement qui se déroule EN FRANCE ou qui concerne "
-                        "au premier chef un acteur/une institution française (ministre, "
-                        "collectivité, entreprise française...) est TOUJOURS 'France', même "
-                        "traité par un média étranger ou avec une portée internationale — "
+                        "défaut. Ex: un sujet sur la guerre en Ukraine est 'International', "
+                        "pas 'Tech & Numérique'. "
+                        "Distinction POLITIQUE vs FRANCE : un sujet sur le gouvernement, le "
+                        "Parlement, une élection, un parti ou une réforme institutionnelle "
+                        "française est 'Politique' ; 'France' est réservée aux sujets français "
+                        "qui ne relèvent d'aucune catégorie plus spécifique (ni Politique, ni "
+                        "Économie, ni Justice, ni Faits divers...). "
+                        "Distinction FRANCE vs INTERNATIONAL : un événement qui se déroule EN "
+                        "FRANCE ou qui concerne au premier chef un acteur/une institution "
+                        "française (ministre, collectivité, entreprise française...) est "
+                        "TOUJOURS 'Politique' ou 'France' selon le cas ci-dessus, même traité "
+                        "par un média étranger ou avec une portée internationale — "
                         "'International' est réservé aux sujets qui se déroulent hors de "
                         "France ou concernent plusieurs pays sans la France comme acteur "
-                        "principal."
+                        "principal (l'Europe/l'UE et la géopolitique/défense n'ont pas de "
+                        "catégorie dédiée, elles relèvent d''International'). "
+                        "Distinction FAITS DIVERS vs JUSTICE : un événement isolé (accident, "
+                        "agression, disparition, incendie, noyade...) sans enjeu de société ni "
+                        "procédure judiciaire engagée est 'Faits divers' ; dès que le sujet "
+                        "porte sur le déroulé d'un procès, d'une enquête judiciaire ou d'une "
+                        "décision de justice, c'est 'Justice'. "
+                        "Distinction ENVIRONNEMENT vs SOCIÉTÉ : climat, écologie, pollution, "
+                        "biodiversité sont 'Environnement' ; les autres enjeux de société "
+                        "(inégalités, immigration, discriminations...) sont 'Société'. "
+                        "L'astronomie et l'exploration spatiale relèvent de 'Science & Espace' "
+                        "(pas de catégorie dédiée). "
+                        "'Bons plans' est réservée aux sujets qui annoncent une promotion, une "
+                        "réduction, un code promo ou un prix cassé sur un produit précis — pas "
+                        "à l'actualité économique/commerciale d'une entreprise (qui reste dans "
+                        "sa catégorie normale, ex: 'Économie & Finance' ou 'Tech & Numérique')."
                     ),
                 },
                 "title_fr": {
