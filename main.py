@@ -267,6 +267,24 @@ WIKI_REGISTRY_DESCRIPTION = (
     "nouvelle édition), organisés par catégorie, date et source."
 )
 
+# Décrit comment explorer le wiki par simple fetch d'URL (JSON), sans recherche
+# sémantique — utile pour "les actualités d'aujourd'hui/hier/du 3 août" ou "la
+# semaine dernière", que search_wiki (similarité sémantique, aucune notion de
+# date) répond mal : un événement massivement couvert mais terminé depuis des
+# jours (ex: une finale sportive passée) ressort comme meilleur match sémantique
+# pour une requête générique "actualités du jour", même complètement obsolète.
+# Générique par construction (voir wiki_build.py::run) : ne mentionne aucun champ
+# ni nom de fichier — un autre wiki producteur (contes-agent...) peut publier une
+# structure totalement différente (par auteur, par collection...) sans que
+# wiki-agent n'ait rien à connaître de particulier, juste suivre les URLs.
+WIKI_REGISTRY_STRUCTURE = (
+    "Pour explorer le wiki sans recherche sémantique : {base_url}/wiki/index.json "
+    "liste les sections disponibles, chacune avec sa propre description et son "
+    "propre index JSON (champ 'index') listant ses entrées ; chaque entrée a un "
+    "champ 'page' (URL à lire pour son contenu). Récupère n'importe laquelle de "
+    "ces URLs (JSON ou page) avec le même outil de lecture de page."
+)
+
 
 async def main() -> None:
     await storage.init_db()
@@ -315,15 +333,17 @@ async def main() -> None:
     # recherche.
     await asyncio.get_event_loop().run_in_executor(None, vector_store.warmup_model)
 
+    # Adresse interne du réseau Docker "ansible" (pas le domaine public
+    # news.caronboulme.fr) : ce dernier passe par Traefik + middleware vk-hybrid,
+    # qui rejette (401) les appels d'un service interne sans cookie/API key VK —
+    # inutile ici, wiki-agent et agent-news sont sur le même réseau de confiance.
+    news_base_url = "http://agent-news:8080"
     await nexus.publish(f"common/wiki_registry/{AGENT_NAME}", {
         "agent": AGENT_NAME,
-        # Adresse interne du réseau Docker "ansible" (pas le domaine public
-        # news.caronboulme.fr) : ce dernier passe par Traefik + middleware vk-hybrid,
-        # qui rejette (401) les appels d'un service interne sans cookie/API key VK —
-        # inutile ici, wiki-agent et agent-news sont sur le même réseau de confiance.
-        "base_url": "http://agent-news:8080",
+        "base_url": news_base_url,
         "search_path": "/api/wiki/search",
         "description": WIKI_REGISTRY_DESCRIPTION,
+        "structure": WIKI_REGISTRY_STRUCTURE.format(base_url=news_base_url),
     }, retain=True)
     logger.info(f"Enregistrement common/wiki_registry/{AGENT_NAME} publié (retain)")
 

@@ -13,6 +13,7 @@ contes-agent) : c'est une pure mise en forme de ce qui est déjà en base, pas
 d'état incrémental à gérer.
 """
 
+import json
 import logging
 import os
 import re
@@ -189,18 +190,24 @@ def _render_category_page(title: str, intro: str, items: list[tuple[str, str, st
     return "\n".join(lines)
 
 
-def _render_date_page(date: str, intro: str, items: list[tuple[str, str, str]],
+def _render_date_page(date: str, intro: str, items: list[tuple[str, str, str, str]],
                        category_summaries: dict[str, str], headline: str, flash: str) -> str:
-    """items = [(label, lien_relatif, catégorie)] — liste de liens simple, regroupée
-    par catégorie (ordre CATEGORIES). Entre le titre de la catégorie et sa liste, un
-    paragraphe de synthèse (bulletin_gen.py::_generate_category_summaries, stocké dans
-    bulletin_json["category_summaries"]) qui résume TOUS les sujets de cette catégorie
-    pour la journée en un seul texte — pas un résumé par sujet. headline/flash : le
-    bulletin global du jour (bulletin_gen.py::_generate_flash), déjà généré par le
-    pipeline mais jamais affiché jusqu'ici — aucun appel LLM supplémentaire ici."""
-    by_category: dict[str, list[tuple[str, str]]] = {}
-    for label, link, category in items:
-        by_category.setdefault(category, []).append((label, link))
+    """items = [(label, lien_relatif, catégorie, sources)] — liste de liens simple,
+    regroupée par catégorie (ordre CATEGORIES). 'sources' (noms de médias déjà formatés,
+    éventuellement vide) affiché à côté de chaque sujet : sans ça, un agent qui ne
+    parcourt que cette page (cas courant pour "les actus d'aujourd'hui/de la semaine
+    dernière", voir wiki-agent) n'a accès à aucune attribution de source, seulement au
+    titre du sujet — il faudrait sinon aller chercher chaque fiche sujet individuellement,
+    ce qui ne passe pas à l'échelle sur une journée à 90+ sujets. Entre le titre de la
+    catégorie et sa liste, un paragraphe de synthèse (bulletin_gen.py::
+    _generate_category_summaries, stocké dans bulletin_json["category_summaries"]) qui
+    résume TOUS les sujets de cette catégorie pour la journée en un seul texte — pas un
+    résumé par sujet. headline/flash : le bulletin global du jour (bulletin_gen.py::
+    _generate_flash), déjà généré par le pipeline mais jamais affiché jusqu'ici — aucun
+    appel LLM supplémentaire ici."""
+    by_category: dict[str, list[tuple[str, str, str]]] = {}
+    for label, link, category, sources in items:
+        by_category.setdefault(category, []).append((label, link, sources))
 
     lines = [f"# Sujets du {_format_date_fr(date)}", ""]
     if intro:
@@ -224,8 +231,9 @@ def _render_date_page(date: str, intro: str, items: list[tuple[str, str, str]],
         if summary:
             lines.append(summary)
             lines.append("")
-        for label, link in by_category[category]:
-            lines.append(f"- [{label}]({link})")
+        for label, link, sources in by_category[category]:
+            suffix = f" — {sources}" if sources else ""
+            lines.append(f"- [{label}]({link}){suffix}")
         lines.append("")
     return "\n".join(lines)
 
@@ -266,6 +274,11 @@ def _render_index_page(n_subjects: int, n_dates: int, n_categories: int, n_publi
 async def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
+
+
+async def _write_json(path: Path, data: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 async def run() -> dict:
@@ -315,6 +328,7 @@ async def run() -> dict:
 
     # Catégories (vocabulaire fixe, voir clustering.CATEGORIES)
     category_items = []
+    category_items_json = []
     for cat in CATEGORIES:
         members = subject_items_by_category.get(cat, [])
         if not members:
@@ -325,6 +339,9 @@ async def run() -> dict:
             _render_category_page(cat, f"{len(members)} sujet(s).", members),
         )
         category_items.append((cat, f"{cslug}.md", f"{len(members)} sujet(s)"))
+        category_items_json.append({
+            "label": cat, "page": f"/wiki/categories/{cslug}/", "n_subjects": len(members),
+        })
     await _write(WIKI_SRC_DIR / "categories" / "index.md", _render_list_page("Catégories", "", category_items))
 
     # Dates : tous les sujets ayant eu une édition ce jour-là — affiche le titre du
@@ -332,10 +349,14 @@ async def run() -> dict:
     # dernier est délibérément préservé tel quel comme archive (voir storage.py::
     # update_subject) et n'est donc jamais retraduit, contrairement au titre du sujet.
     date_items = []
+    date_items_json = []
     for date in sorted(dates_seen, reverse=True):
         members = await storage.get_subjects_by_date(date)
         items = [
-            (_clean_text(m["title"]), f"../sujets/{_subject_slug(m['title'], m['id'])}.md", m["category"])
+            (
+                _clean_text(m["title"]), f"../sujets/{_subject_slug(m['title'], m['id'])}.md", m["category"],
+                ", ".join(s["name"] for s in _clean_sources(m.get("edition_sources") or [])),
+            )
             for m in members
         ]
         bulletin = await storage.get_bulletin_by_date(date)
@@ -349,10 +370,15 @@ async def run() -> dict:
                                category_summaries, headline, flash),
         )
         date_items.append((_format_date_fr(date), f"{date}.md", f"{len(items)} édition(s)"))
+        date_items_json.append({
+            "label": _format_date_fr(date), "date": date, "page": f"/wiki/dates/{date}/",
+            "n_subjects": len(items), "has_daily_summary": bool(headline or flash),
+        })
     await _write(WIKI_SRC_DIR / "dates" / "index.md", _render_list_page("Dates", "", date_items))
 
     # Sources
     publisher_items = []
+    publisher_items_json = []
     for pub, subject_ids in sorted(publishers_index.items(), key=lambda kv: _normalize(kv[0])):
         pslug = _slugify(pub)
         items = [
@@ -364,6 +390,9 @@ async def run() -> dict:
             _render_list_page(pub, f"{len(items)} sujet(s) citant cette source.", items),
         )
         publisher_items.append((pub, f"{pslug}.md", f"{len(items)} sujet(s)"))
+        publisher_items_json.append({
+            "label": pub, "page": f"/wiki/publishers/{pslug}/", "n_subjects": len(items),
+        })
     await _write(WIKI_SRC_DIR / "publishers" / "index.md", _render_list_page("Sources", "", publisher_items))
 
     # Accueil
@@ -379,6 +408,45 @@ async def run() -> dict:
         shutil.rmtree(WIKI_SITE_DIR)
     cfg = load_config(str(MKDOCS_CONFIG), docs_dir=str(WIKI_SRC_DIR), site_dir=str(WIKI_SITE_DIR))
     mkdocs_build(cfg)
+
+    # Structure JSON du wiki (écrite APRÈS mkdocs_build, qui recrée WIKI_SITE_DIR à
+    # neuf) — permet à un agent externe (wiki-agent) d'explorer le wiki par simple
+    # fetch d'URL, sans connaître à l'avance ses dates/catégories/sources : il découvre
+    # tout depuis /wiki/index.json, où qu'aille wiki-agent (racine générique commune
+    # à tous les wikis producteurs) puis les index.json de chaque section (spécifiques
+    # à ce wiki). Les sujets individuels n'ont pas d'index (trop nombreux) : ils
+    # restent découvrables uniquement via la recherche sémantique (/api/wiki/search).
+    await _write_json(WIKI_SITE_DIR / "dates" / "index.json", {"items": date_items_json})
+    await _write_json(WIKI_SITE_DIR / "categories" / "index.json", {"items": category_items_json})
+    await _write_json(WIKI_SITE_DIR / "publishers" / "index.json", {"items": publisher_items_json})
+    await _write_json(WIKI_SITE_DIR / "index.json", {
+        "description": (
+            "Sujets d'actualité consolidés au fil du temps, organisés par "
+            "catégorie, date et source."
+        ),
+        "sections": [
+            {
+                "label": "Par date",
+                "index": "/wiki/dates/index.json",
+                "description": (
+                    "Une entrée par jour où au moins un sujet a été publié/mis à jour. "
+                    "'page' mène à la page du jour, qui contient la synthèse globale du "
+                    "jour (si has_daily_summary) suivie de tous les sujets de ce jour, "
+                    "groupés par catégorie."
+                ),
+            },
+            {
+                "label": "Par catégorie",
+                "index": "/wiki/categories/index.json",
+                "description": "'page' mène à la liste des sujets de cette catégorie, groupés par date.",
+            },
+            {
+                "label": "Par source",
+                "index": "/wiki/publishers/index.json",
+                "description": "'page' mène à la liste des sujets citant ce média.",
+            },
+        ],
+    })
 
     result = {
         "subjects": len(subjects),
