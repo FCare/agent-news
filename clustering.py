@@ -32,9 +32,9 @@ CATEGORIES = [
     "Environnement",
     "Société",
     "Justice",
-    "Faits divers",
     "Éducation & Recherche",
     "Culture & Médias",
+    "People",
     "Bons plans",
 ]
 
@@ -85,14 +85,6 @@ _CATEGORY_KEYWORDS: list[tuple[str, list[str]]] = [
         "sport", "sportif", "sportive", "entraîneur", "coach", "transfert", "joueur",
         "joueuse", "champion", "championnat", "tournoi", "match", "score", "but", "essai",
     ]),
-    ("Faits divers", [
-        "fait divers", "faits divers", "accident", "collision", "incendie",
-        "noyade", "noyé", "disparition", "disparu", "disparue", "enlèvement",
-        "kidnapping", "séquestration", "otage", "cambriolage", "braquage",
-        "vol à main armée", "explosion", "effondrement", "intoxication",
-        "chute mortelle", "drame", "tuerie", "fusillade", "meurtre", "homicide",
-        "agression", "viol", "coups de couteau", "égorgé",
-    ]),
     ("Justice", [
         "tribunal", "cour", "jugement", "verdict", "condamné", "condamnation",
         "acquittement", "procès", "audience", "plainte", "inculpé", "mis en examen",
@@ -102,6 +94,13 @@ _CATEGORY_KEYWORDS: list[tuple[str, list[str]]] = [
         "droits humains", "human rights", "amnesty", "discrimination", "harcèlement",
         "fraude", "corruption",
         "cour suprême", "conseil constitutionnel", "cour de cassation",
+        # Faits divers
+        "fait divers", "faits divers", "accident", "collision", "incendie",
+        "noyade", "noyé", "disparition", "disparu", "disparue", "enlèvement",
+        "kidnapping", "séquestration", "otage", "cambriolage", "braquage",
+        "vol à main armée", "explosion", "effondrement", "intoxication",
+        "chute mortelle", "drame", "tuerie", "fusillade", "meurtre", "homicide",
+        "agression", "viol", "coups de couteau", "égorgé",
     ]),
     ("Éducation & Recherche", [
         "éducation", "école", "collège", "lycée", "université", "fac", "campus",
@@ -169,9 +168,6 @@ _CATEGORY_KEYWORDS: list[tuple[str, list[str]]] = [
         "chanteuse", "groupe", "grammy", "victoires de la musique", "spotify",
         "nouvel album", "nouveau single", "nouveau clip", "sortie d'album",
         "sortie de l'album",
-        # People & célébrités
-        "célébrité", "people", "personnalité", "show business", "showbiz",
-        "star", "vedette", "influenceur", "influencer",
         # Jeux vidéo
         "jeu vidéo", "video game", "gaming", "playstation", "xbox", "nintendo",
         "steam", "e-sport", "esport",
@@ -181,6 +177,11 @@ _CATEGORY_KEYWORDS: list[tuple[str, list[str]]] = [
         "littérature", "literature", "prix littéraire", "booker", "goncourt",
         # Médias
         "presse", "journal", "media", "médias", "journaliste", "télévision", "radio",
+    ]),
+    ("People", [
+        "célébrité", "célébrités", "people", "personnalité", "personnalités",
+        "show business", "showbiz", "star", "vedette", "influenceur",
+        "influenceuse", "influencer", "paparazzi",
     ]),
     ("Environnement", [
         "climat", "climate", "environnement", "environment", "écologie", "ecology",

@@ -250,8 +250,8 @@ async def _majority_category(db: aiosqlite.Connection, subject_id: int, fallback
     VALID_CATEGORIES = {
         "Politique", "France", "International", "Économie & Finance",
         "Tech & Numérique", "Science & Espace", "Santé", "Sport",
-        "Environnement", "Société", "Justice", "Faits divers",
-        "Éducation & Recherche", "Culture & Médias", "Bons plans",
+        "Environnement", "Société", "Justice",
+        "Éducation & Recherche", "Culture & Médias", "People", "Bons plans",
     }
     
     async with db.execute(

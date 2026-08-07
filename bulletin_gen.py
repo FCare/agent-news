@@ -28,9 +28,9 @@ CATEGORIES = [
     "Environnement",
     "Société",
     "Justice",
-    "Faits divers",
     "Éducation & Recherche",
     "Culture & Médias",
+    "People",
     "Bons plans",
 ]
 
@@ -107,12 +107,10 @@ _DEEP_DIVE_TOOL = [{
                         "'International' est réservé aux sujets qui se déroulent hors de "
                         "France ou concernent plusieurs pays sans la France comme acteur "
                         "principal (l'Europe/l'UE et la géopolitique/défense n'ont pas de "
-                        "catégorie dédiée, elles relèvent d''International'). "
-                        "Distinction FAITS DIVERS vs JUSTICE : un événement isolé (accident, "
-                        "agression, disparition, incendie, noyade...) sans enjeu de société ni "
-                        "procédure judiciaire engagée est 'Faits divers' ; dès que le sujet "
-                        "porte sur le déroulé d'un procès, d'une enquête judiciaire ou d'une "
-                        "décision de justice, c'est 'Justice'. "
+                        "catégorie dédiée, elles relèvent d''International'). Les faits divers "
+                        "(accident, agression, disparition, incendie, noyade...), qu'il y ait "
+                        "ou non une procédure judiciaire engagée, relèvent de 'Justice' (pas de "
+                        "catégorie dédiée). "
                         "Distinction ENVIRONNEMENT vs SOCIÉTÉ : climat, écologie, pollution, "
                         "biodiversité sont 'Environnement' ; les autres enjeux de société "
                         "(inégalités, immigration, discriminations...) sont 'Société'. "
@@ -121,7 +119,13 @@ _DEEP_DIVE_TOOL = [{
                         "'Bons plans' est réservée aux sujets qui annoncent une promotion, une "
                         "réduction, un code promo ou un prix cassé sur un produit précis — pas "
                         "à l'actualité économique/commerciale d'une entreprise (qui reste dans "
-                        "sa catégorie normale, ex: 'Économie & Finance' ou 'Tech & Numérique')."
+                        "sa catégorie normale, ex: 'Économie & Finance' ou 'Tech & Numérique'). "
+                        "Distinction PEOPLE vs CULTURE & MÉDIAS : un sujet centré sur la vie "
+                        "privée, les frasques ou l'image publique d'une célébrité (couple, "
+                        "polémique, apparition, interview people...) est 'People' ; une sortie "
+                        "d'œuvre (film, album, livre, jeu vidéo) ou une actualité de son métier "
+                        "artistique reste 'Culture & Médias', même si l'artiste est cité par son "
+                        "nom."
                     ),
                 },
                 "title_fr": {
